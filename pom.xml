@@ -49,6 +49,13 @@
     <system>GitHub Actions</system>
     <url>https://github.com/mybatis/jpetstore-6/actions</url>
   </ciManagement>
+  <distributionManagement>
+    <site>
+      <id>gh-pages-scm</id>
+      <name>Mybatis GitHub Pages</name>
+      <url>scm:git:ssh://git@github.com/mybatis/jpetstore-6.git</url>
+    </site>
+  </distributionManagement>
 
   <modules>
     <module>monolith</module>
