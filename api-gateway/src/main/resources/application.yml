@@ -1,0 +1,229 @@
+# =============================================================================
+# JPetStore API Gateway — Spring Cloud Gateway Configuration
+# =============================================================================
+# Single public entry point for the JPetStore microservices architecture.
+# Implements the Strangler Fig pattern with runtime-configurable per-service
+# routing flags stored in Redis.
+#
+# IMPORTANT: Spring Cloud Gateway is REACTIVE (Netty/WebFlux).
+# No server.servlet.* properties are permitted.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Server Configuration
+# -----------------------------------------------------------------------------
+server:
+  port: 8080
+
+# -----------------------------------------------------------------------------
+# Spring Application Configuration
+# -----------------------------------------------------------------------------
+spring:
+  application:
+    name: api-gateway
+
+  # ---------------------------------------------------------------------------
+  # Spring Cloud Gateway Route Definitions
+  # ---------------------------------------------------------------------------
+  # Routes are evaluated in declaration order. More specific routes MUST appear
+  # before the catch-all fallback. Routes are organized into:
+  #   1. Flag-controlled Strangler Fig routes (*.action — default to monolith)
+  #   2. Static microservice API routes (always route to microservices)
+  #   3. Static asset routes (always route to monolith)
+  #   4. Catch-all fallback (lowest priority — routes to monolith)
+  # ---------------------------------------------------------------------------
+  cloud:
+    gateway:
+      routes:
+        # =====================================================================
+        # 1. FLAG-CONTROLLED STRANGLER FIG ROUTES
+        # =====================================================================
+        # These routes default to the monolith. At runtime, RoutingFlagFilter
+        # reads the routing-flag-key from Redis and overrides the target to
+        # the microservice-uri when the flag value is "microservice".
+        # The *.action URL pattern comes from web.xml line 62:
+        #   <url-pattern>*.action</url-pattern>
+        # Stripes convention: /actions/{BeanName}.action
+        # =====================================================================
+
+        # Account bounded context — /actions/Account.action
+        - id: account-actions
+          uri: http://monolith:8080
+          predicates:
+            - Path=/actions/Account.action**
+          metadata:
+            routing-flag-key: routing.flag.account-service
+            microservice-uri: http://account-service:8081
+
+        # Catalog bounded context — /actions/Catalog.action
+        - id: catalog-actions
+          uri: http://monolith:8080
+          predicates:
+            - Path=/actions/Catalog.action**
+          metadata:
+            routing-flag-key: routing.flag.catalog-service
+            microservice-uri: http://catalog-service:8082
+
+        # Order bounded context (Cart) — /actions/Cart.action
+        # Cart is part of the Order bounded context per AAP Section 0.1.1
+        - id: cart-actions
+          uri: http://monolith:8080
+          predicates:
+            - Path=/actions/Cart.action**
+          metadata:
+            routing-flag-key: routing.flag.order-service
+            microservice-uri: http://order-service:8083
+
+        # Order bounded context (Order) — /actions/Order.action
+        # Both Cart and Order use routing.flag.order-service
+        - id: order-actions
+          uri: http://monolith:8080
+          predicates:
+            - Path=/actions/Order.action**
+          metadata:
+            routing-flag-key: routing.flag.order-service
+            microservice-uri: http://order-service:8083
+
+        # =====================================================================
+        # 2. STATIC MICROSERVICE API ROUTES
+        # =====================================================================
+        # REST APIs exposed by new microservices. These always route to
+        # their respective microservice — no routing flag evaluation.
+        # =====================================================================
+
+        # Account Service REST API
+        - id: account-api
+          uri: http://account-service:8081
+          predicates:
+            - Path=/api/accounts/**
+
+        # Catalog Service REST API
+        - id: catalog-api
+          uri: http://catalog-service:8082
+          predicates:
+            - Path=/api/catalog/**
+
+        # Order Service REST API
+        - id: order-api
+          uri: http://order-service:8083
+          predicates:
+            - Path=/api/orders/**
+
+        # =====================================================================
+        # 3. STATIC ASSET ROUTES
+        # =====================================================================
+        # CSS and images always come from the monolith. Static assets are
+        # not modified per AAP Section 0.3.2.
+        # =====================================================================
+
+        # CSS static assets
+        - id: static-css
+          uri: http://monolith:8080
+          predicates:
+            - Path=/css/**
+
+        # Image static assets
+        - id: static-images
+          uri: http://monolith:8080
+          predicates:
+            - Path=/images/**
+
+        # =====================================================================
+        # 4. CATCH-ALL MONOLITH FALLBACK
+        # =====================================================================
+        # Any request not matching the above patterns falls through to the
+        # monolith (e.g., /, index.html, help.html). This is the lowest
+        # priority route.
+        # =====================================================================
+        - id: monolith-fallback
+          uri: http://monolith:8080
+          predicates:
+            - Path=/**
+          order: 9999
+
+  # ---------------------------------------------------------------------------
+  # Redis Connection Configuration
+  # ---------------------------------------------------------------------------
+  # Redis is used for storing routing flags (Strangler Fig per-service flags)
+  # and can also store externalized session/cart state.
+  # Defaults use Docker Compose service name 'redis', overridable via env vars.
+  # ---------------------------------------------------------------------------
+  data:
+    redis:
+      host: ${REDIS_HOST:redis}
+      port: ${REDIS_PORT:6379}
+      timeout: 2000
+
+# =============================================================================
+# Routing Flag Configuration (Custom Properties)
+# =============================================================================
+# Per-service routing flags consumed by RoutingFlagConfig.java.
+# ALL flags default to "monolith" — the system starts in full-monolith mode.
+# Services are cut over one at a time (Catalog -> Account -> Order) by changing
+# the Redis value from "monolith" to "microservice" — no redeployment required.
+# =============================================================================
+routing:
+  flags:
+    account-service: monolith
+    catalog-service: monolith
+    order-service: monolith
+    cache-ttl-seconds: 1
+    redis-key-prefix: "routing.flag."
+
+# =============================================================================
+# JWT Configuration (Custom Properties)
+# =============================================================================
+# JWT settings consumed by AuthenticationFilter for validating tokens on
+# protected paths. The secret MUST be externalized via environment variable
+# for production deployments.
+# =============================================================================
+jwt:
+  secret: ${JWT_SECRET:changeme-in-production}
+  issuer: jpetstore
+  expiration: 3600
+
+# =============================================================================
+# Spring Boot Actuator Configuration
+# =============================================================================
+# Health checks for container orchestration and operational monitoring.
+# =============================================================================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+# =============================================================================
+# Service URL Configuration (Custom Properties)
+# =============================================================================
+# Backend service URLs consumed by RouteConfig.java and other configuration
+# classes. All URLs use Docker Compose service hostnames as defaults,
+# overridable via environment variables.
+#
+# Port assignments per AAP Section 0.7.6:
+#   Monolith:        8080
+#   Account Service: 8081
+#   Catalog Service: 8082
+#   Order Service:   8083
+# =============================================================================
+services:
+  monolith:
+    url: ${MONOLITH_URL:http://monolith:8080}
+  account:
+    url: ${ACCOUNT_SERVICE_URL:http://account-service:8081}
+  catalog:
+    url: ${CATALOG_SERVICE_URL:http://catalog-service:8082}
+  order:
+    url: ${ORDER_SERVICE_URL:http://order-service:8083}
+
+# =============================================================================
+# Logging Configuration
+# =============================================================================
+logging:
+  level:
+    org.springframework.cloud.gateway: INFO
+    com.jpetstore.gateway: DEBUG
+    reactor.netty: INFO
