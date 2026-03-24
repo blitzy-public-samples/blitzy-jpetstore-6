@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Liquibase Master Changelog for Order Service (Order/Cart Bounded Context)
+
+        This file is the single entry point for all database schema management for
+        the Order Service microservice. It is referenced by application.yml via:
+            spring.liquibase.change-log=classpath:db/changelog/db.changelog-master.xml
+
+        Hibernate ddl-auto is set to 'validate' — all schema changes are managed
+        exclusively through Liquibase changelogs listed below. Hibernate validates
+        the schema matches entity mappings but does NOT create, update, or drop
+        any tables or sequences.
+
+        The Order Service owns 3 PostgreSQL tables and 1 sequence derived from
+        the monolith's HSQLDB schema (jpetstore-hsqldb-schema.sql):
+            - order_id_seq  (PostgreSQL SEQUENCE, replaces monolith's non-thread-safe
+                             HSQLDB sequence table, starting at 2000)
+            - orders        (order_id PK, 25 columns from HSQLDB + 1 new 'status'
+                             column for Saga orchestration state machine)
+            - orderstatus   (composite PK on order_id + line_num, per-line status)
+            - lineitem      (composite PK on order_id + line_num, quantity + price)
+
+        Cross-service foreign keys are deliberately NOT created as database
+        constraints — they are enforced at the application layer via REST APIs:
+            - orders.username has NO FK to Account Service's account table
+              (was orders.userid -> account.userid in the monolith)
+            - lineitem.item_id has NO FK to Catalog Service's item table
+              (was lineitem.itemid -> item.itemid in the monolith)
+
+        Target database: PostgreSQL (jpetstore_order)
+
+        Include paths are relative to the classpath root, NOT relative to this file.
+    -->
+
+    <!-- Initial schema: creates the order_id_seq PostgreSQL sequence and the 3 -->
+    <!-- Order/Cart bounded context tables (orders, orderstatus, lineitem).      -->
+    <include file="db/changelog/001-initial-schema.xml"/>
+
+    <!-- Add future changelogs below in sequential order (e.g. 002-add-xxx.xml) -->
+
+</databaseChangeLog>
