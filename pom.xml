@@ -28,11 +28,11 @@
   </parent>
 
   <groupId>org.mybatis</groupId>
-  <artifactId>jpetstore</artifactId>
+  <artifactId>jpetstore-parent</artifactId>
   <version>6.2.1-SNAPSHOT</version>
-  <packaging>war</packaging>
+  <packaging>pom</packaging>
 
-  <name>JPetStore Demo 6</name>
+  <name>JPetStore Microservices Parent</name>
   <url>https://www.mybatis.org/jpetstore-6/</url>
 
   <scm>
@@ -49,506 +49,116 @@
     <system>GitHub Actions</system>
     <url>https://github.com/mybatis/jpetstore-6/actions</url>
   </ciManagement>
-  <distributionManagement>
-    <site>
-      <id>gh-pages-scm</id>
-      <name>Mybatis GitHub Pages</name>
-      <url>scm:git:ssh://git@github.com/mybatis/jpetstore-6.git</url>
-    </site>
-  </distributionManagement>
+
+  <modules>
+    <module>monolith</module>
+    <module>api-gateway</module>
+    <module>account-service</module>
+    <module>catalog-service</module>
+    <module>order-service</module>
+    <module>migration</module>
+  </modules>
 
   <properties>
-    <!-- Java Usage -->
     <java.version>17</java.version>
     <java.release.version>17</java.release.version>
+    <maven.compiler.source>17</maven.compiler.source>
+    <maven.compiler.target>17</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
-    <cargo-maven3-plugin.version>1.10.26</cargo-maven3-plugin.version>
-    <clirr.comparisonVersion>6.0.2</clirr.comparisonVersion>
+    <!-- Spring Boot 3.5.12 - latest stable 3.5.x -->
+    <spring-boot.version>3.5.12</spring-boot.version>
+    <!-- Spring Cloud BOM for Gateway -->
+    <spring-cloud.version>2025.0.0</spring-cloud.version>
 
+    <!-- Dependency versions -->
+    <postgresql.version>42.7.5</postgresql.version>
+    <jjwt.version>0.12.6</jjwt.version>
+    <testcontainers.version>1.20.4</testcontainers.version>
+    <hsqldb.version>2.7.4</hsqldb.version>
+
+    <!-- Monolith-specific versions (inherited by monolith module) -->
     <slf4j.version>2.0.17</slf4j.version>
     <spring.version>6.2.17</spring.version>
     <assertj.version>3.27.7</assertj.version>
-    <byte-buddy.version>1.18.7-jdk5</byte-buddy.version>
     <mockito.version>5.23.0</mockito.version>
-    <hsqldb.version>2.7.4</hsqldb.version>
+    <cargo-maven3-plugin.version>1.10.26</cargo-maven3-plugin.version>
+    <byte-buddy.version>1.18.7-jdk5</byte-buddy.version>
+
     <module.name>org.mybatis.jpetstore</module.name>
-
-    <!-- Reproducible Builds -->
     <project.build.outputTimestamp>1767296648</project.build.outputTimestamp>
-
-    <!-- Surefire Setup -->
-    <argLine>-javaagent:${settings.localRepository}/net/bytebuddy/byte-buddy-agent/${byte-buddy.version}/byte-buddy-agent-${byte-buddy.version}.jar</argLine>
   </properties>
 
-  <dependencies>
-
-    <dependency>
-      <groupId>org.mybatis</groupId>
-      <artifactId>mybatis</artifactId>
-      <version>3.5.19</version>
-    </dependency>
-    <dependency>
-      <groupId>org.mybatis</groupId>
-      <artifactId>mybatis-spring</artifactId>
-      <version>3.0.5</version>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework</groupId>
-      <artifactId>spring-context</artifactId>
-      <version>${spring.version}</version>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework</groupId>
-      <artifactId>spring-jdbc</artifactId>
-      <version>${spring.version}</version>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework</groupId>
-      <artifactId>spring-web</artifactId>
-      <!-- Keep spring-web at 5.3.39 until jakarta upgrade occurs -->
-      <version>5.3.39</version>
-    </dependency>
-    <dependency>
-      <groupId>net.sourceforge.stripes</groupId>
-      <artifactId>stripes</artifactId>
-      <version>1.6.0</version>
-      <exclusions>
-        <exclusion>
-          <groupId>commons-logging</groupId>
-          <artifactId>commons-logging</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>log4j</groupId>
-          <artifactId>log4j</artifactId>
-        </exclusion>
-      </exclusions>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.taglibs</groupId>
-      <artifactId>taglibs-standard-spec</artifactId>
-      <version>1.2.5</version>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.taglibs</groupId>
-      <artifactId>taglibs-standard-impl</artifactId>
-      <version>1.2.5</version>
-    </dependency>
-    <dependency>
-      <groupId>jakarta.servlet.jsp</groupId>
-      <artifactId>jakarta.servlet.jsp-api</artifactId>
-      <version>2.3.6</version>
-      <scope>provided</scope>
-    </dependency>
-    <dependency>
-      <groupId>jakarta.servlet</groupId>
-      <artifactId>jakarta.servlet-api</artifactId>
-      <version>4.0.4</version>
-      <scope>provided</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.slf4j</groupId>
-      <artifactId>slf4j-api</artifactId>
-      <version>${slf4j.version}</version>
-    </dependency>
-    <dependency>
-      <groupId>org.slf4j</groupId>
-      <artifactId>slf4j-simple</artifactId>
-      <version>${slf4j.version}</version>
-    </dependency>
-    <dependency>
-      <groupId>org.hsqldb</groupId>
-      <artifactId>hsqldb</artifactId>
-      <version>${hsqldb.version}</version>
-    </dependency>
-
-    <!-- Due to osgi issue with mybatis spring, its required here for liberty -->
-    <dependency>
-      <groupId>org.springframework.batch</groupId>
-      <artifactId>spring-batch-infrastructure</artifactId>
-      <version>5.2.5</version>
-    </dependency>
-
-    <!-- Test dependencies -->
-    <dependency>
-      <groupId>net.bytebuddy</groupId>
-      <artifactId>byte-buddy</artifactId>
-      <version>${byte-buddy.version}</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>net.bytebuddy</groupId>
-      <artifactId>byte-buddy-agent</artifactId>
-      <version>${byte-buddy.version}</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.junit.jupiter</groupId>
-      <artifactId>junit-jupiter-engine</artifactId>
-      <version>6.0.3</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.mockito</groupId>
-      <artifactId>mockito-core</artifactId>
-      <version>${mockito.version}</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.mockito</groupId>
-      <artifactId>mockito-junit-jupiter</artifactId>
-      <version>${mockito.version}</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.assertj</groupId>
-      <artifactId>assertj-core</artifactId>
-      <version>${assertj.version}</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>com.codeborne</groupId>
-      <artifactId>selenide</artifactId>
-      <version>7.15.0</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.seleniumhq.selenium</groupId>
-      <artifactId>htmlunit3-driver</artifactId>
-      <version>4.41.0</version>
-      <scope>test</scope>
-      <exclusions>
-        <exclusion>
-          <groupId>commons-logging</groupId>
-          <artifactId>commons-logging</artifactId>
-        </exclusion>
-      </exclusions>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework</groupId>
-      <artifactId>spring-test</artifactId>
-      <version>${spring.version}</version>
-      <scope>test</scope>
-    </dependency>
-  </dependencies>
+  <dependencyManagement>
+    <dependencies>
+      <!-- Spring Boot BOM -->
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-dependencies</artifactId>
+        <version>${spring-boot.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <!-- Spring Cloud BOM -->
+      <dependency>
+        <groupId>org.springframework.cloud</groupId>
+        <artifactId>spring-cloud-dependencies</artifactId>
+        <version>${spring-cloud.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <!-- Testcontainers BOM -->
+      <dependency>
+        <groupId>org.testcontainers</groupId>
+        <artifactId>testcontainers-bom</artifactId>
+        <version>${testcontainers.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <!-- JJWT -->
+      <dependency>
+        <groupId>io.jsonwebtoken</groupId>
+        <artifactId>jjwt-api</artifactId>
+        <version>${jjwt.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.jsonwebtoken</groupId>
+        <artifactId>jjwt-impl</artifactId>
+        <version>${jjwt.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.jsonwebtoken</groupId>
+        <artifactId>jjwt-jackson</artifactId>
+        <version>${jjwt.version}</version>
+      </dependency>
+      <!-- PostgreSQL -->
+      <dependency>
+        <groupId>org.postgresql</groupId>
+        <artifactId>postgresql</artifactId>
+        <version>${postgresql.version}</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
 
   <build>
-    <finalName>jpetstore</finalName>
     <pluginManagement>
       <plugins>
         <plugin>
-          <groupId>org.apache.maven.plugins</groupId>
-          <artifactId>maven-war-plugin</artifactId>
-          <version>3.5.1</version>
-          <configuration>
-            <archive>
-              <manifestEntries>
-                <Dependencies>jdk.unsupported</Dependencies>
-              </manifestEntries>
-            </archive>
-          </configuration>
+          <groupId>org.springframework.boot</groupId>
+          <artifactId>spring-boot-maven-plugin</artifactId>
+          <version>${spring-boot.version}</version>
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
-          <artifactId>maven-failsafe-plugin</artifactId>
-          <version>3.5.5</version>
-        </plugin>
-        <plugin>
-          <groupId>org.apache.maven.plugins</groupId>
-          <artifactId>maven-site-plugin</artifactId>
+          <artifactId>maven-compiler-plugin</artifactId>
           <configuration>
-            <locales>default,es,ja,ko</locales>
-          </configuration>
-        </plugin>
-        <plugin>
-          <groupId>org.apache.maven.plugins</groupId>
-          <artifactId>maven-resources-plugin</artifactId>
-          <configuration>
-            <overwrite>true</overwrite>
-          </configuration>
-        </plugin>
-        <plugin>
-          <groupId>org.codehaus.cargo</groupId>
-          <artifactId>cargo-maven3-plugin</artifactId>
-          <version>${cargo-maven3-plugin.version}</version>
-          <configuration>
-            <daemon>
-              <properties>
-                <cargo.daemon.url>http://localhost:18000</cargo.daemon.url>
-                <cargo.daemon.handleid>${project.artifactId}</cargo.daemon.handleid>
-              </properties>
-            </daemon>
+            <source>${java.version}</source>
+            <target>${java.version}</target>
+            <release>${java.release.version}</release>
           </configuration>
         </plugin>
       </plugins>
     </pluginManagement>
-    <plugins>
-      <!-- Keep disabled until jakarta upgrade occurs due to issues with liberty holding stdin/stdout open with ee8
-      <plugin>
-        <groupId>org.codehaus.cargo</groupId>
-        <artifactId>cargo-maven3-plugin</artifactId>
-        <executions>
-          <execution>
-            <id>start-container</id>
-            <goals>
-              <goal>start</goal>
-            </goals>
-            <phase>pre-integration-test</phase>
-          </execution>
-          <execution>
-            <id>stop-container</id>
-            <goals>
-              <goal>stop</goal>
-            </goals>
-            <phase>post-integration-test</phase>
-          </execution>
-        </executions>
-      </plugin>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-failsafe-plugin</artifactId>
-        <executions>
-          <execution>
-            <goals>
-              <goal>integration-test</goal>
-              <goal>verify</goal>
-            </goals>
-          </execution>
-        </executions>
-      </plugin>
-      -->
-    </plugins>
   </build>
-
-  <profiles>
-    <!-- Profiles for Application Server -->
-    <profile>
-      <id>tomcat9</id>
-      <activation>
-        <activeByDefault>true</activeByDefault>
-      </activation>
-      <properties>
-        <tomcat.major-version>9</tomcat.major-version>
-        <tomcat.version>9.0.113</tomcat.version>
-        <cargo.maven.containerId>tomcat${tomcat.major-version}x</cargo.maven.containerId>
-        <cargo.maven.containerUrl>https://repo1.maven.org/maven2/org/apache/tomcat/tomcat/${tomcat.version}/tomcat-${tomcat.version}.zip</cargo.maven.containerUrl>
-      </properties>
-      <build>
-        <plugins>
-          <plugin>
-            <groupId>org.codehaus.cargo</groupId>
-            <artifactId>cargo-maven3-plugin</artifactId>
-            <configuration>
-              <container>
-                <containerId>${cargo.maven.containerId}</containerId>
-                <type>installed</type>
-                <zipUrlInstaller>
-                  <url>${cargo.maven.containerUrl}</url>
-                </zipUrlInstaller>
-              </container>
-            </configuration>
-          </plugin>
-        </plugins>
-      </build>
-    </profile>
-    <profile>
-      <!-- TODO: Remove after we switch to jakarta as end of life -->
-      <id>tomee80</id>
-      <properties>
-        <tomee.major-version>8</tomee.major-version>
-        <tomee.version>8.0.16</tomee.version>
-        <cargo.maven.containerId>tomee${tomee.major-version}x</cargo.maven.containerId>
-        <cargo.maven.containerUrl>https://repo1.maven.org/maven2/org/apache/tomee/apache-tomee/${tomee.version}/apache-tomee-${tomee.version}-plume.zip</cargo.maven.containerUrl>
-      </properties>
-      <build>
-        <plugins>
-          <plugin>
-            <groupId>org.codehaus.cargo</groupId>
-            <artifactId>cargo-maven3-plugin</artifactId>
-            <configuration>
-              <container>
-                <containerId>${cargo.maven.containerId}</containerId>
-                <type>installed</type>
-                <zipUrlInstaller>
-                  <url>${cargo.maven.containerUrl}</url>
-                </zipUrlInstaller>
-              </container>
-            </configuration>
-          </plugin>
-        </plugins>
-      </build>
-    </profile>
-    <profile>
-      <id>wildfly26</id>
-      <!-- TODO: Remove after we switch to jakarta as end of life -->
-      <properties>
-        <wildfly.major-version>26</wildfly.major-version>
-        <wildfly.version>26.1.3.Final</wildfly.version>
-        <cargo.maven.containerId>wildfly${wildfly.major-version}x</cargo.maven.containerId>
-        <cargo.maven.containerUrl>https://github.com/wildfly/wildfly/releases/download/${wildfly.version}/wildfly-${wildfly.version}.zip</cargo.maven.containerUrl>
-        <cargo.jvmargs>--add-opens=java.base/java.util=ALL-UNNAMED</cargo.jvmargs>
-      </properties>
-      <build>
-        <plugins>
-          <plugin>
-            <groupId>org.codehaus.cargo</groupId>
-            <artifactId>cargo-maven3-plugin</artifactId>
-            <configuration>
-              <container>
-                <containerId>${cargo.maven.containerId}</containerId>
-                <type>installed</type>
-                <zipUrlInstaller>
-                  <url>${cargo.maven.containerUrl}</url>
-                </zipUrlInstaller>
-              </container>
-            </configuration>
-          </plugin>
-        </plugins>
-      </build>
-    </profile>
-    <profile>
-      <id>liberty-ee8</id>
-      <properties>
-        <liberty.version>25.0.0.12</liberty.version>
-        <cargo.maven.containerId>liberty</cargo.maven.containerId>
-        <cargo.maven.containerUrl>https://repo1.maven.org/maven2/com/ibm/websphere/appserver/runtime/wlp-javaee8/${liberty.version}/wlp-javaee8-${liberty.version}.zip</cargo.maven.containerUrl>
-      </properties>
-      <build>
-        <plugins>
-          <plugin>
-            <groupId>org.codehaus.cargo</groupId>
-            <artifactId>cargo-maven3-plugin</artifactId>
-            <configuration>
-              <container>
-                <containerId>${cargo.maven.containerId}</containerId>
-                <type>installed</type>
-                <zipUrlInstaller>
-                  <url>${cargo.maven.containerUrl}</url>
-                </zipUrlInstaller>
-                <systemProperties>
-                  <ws.jar.cache.disable>true</ws.jar.cache.disable>
-                </systemProperties>
-              </container>
-            </configuration>
-          </plugin>
-        </plugins>
-      </build>
-    </profile>
-    <profile>
-      <id>jetty</id>
-      <properties>
-        <jetty.major-version>12</jetty.major-version>
-        <jetty.version>12.1.5</jetty.version>
-        <cargo.maven.containerId>jetty${jetty.major-version}x</cargo.maven.containerId>
-        <cargo.jetty.deployer.ee.version>ee8</cargo.jetty.deployer.ee.version>
-      </properties>
-      <build>
-        <plugins>
-          <plugin>
-            <groupId>org.codehaus.cargo</groupId>
-            <artifactId>cargo-maven3-plugin</artifactId>
-            <configuration>
-              <container>
-                <containerId>jetty12x</containerId>
-                <type>installed</type>
-                <artifactInstaller>
-                  <groupId>org.eclipse.jetty</groupId>
-                  <artifactId>jetty-home</artifactId>
-                  <version>${jetty.version}</version>
-                </artifactInstaller>
-              </container>
-            </configuration>
-          </plugin>
-        </plugins>
-      </build>
-    </profile>
-    <profile>
-      <!-- Use 'payara5' as this is not supported with java 17 due to hk2 'dcs' is null error. -->
-      <id>glassfish5</id>
-      <properties>
-        <glassfish.major-version>5</glassfish.major-version>
-        <glassfish.version>5.1.0</glassfish.version>
-        <cargo.maven.containerId>glassfish${glassfish.major-version}x</cargo.maven.containerId>
-        <cargo.maven.containerUrl>https://repo.maven.apache.org/maven2/org/glassfish/main/distributions/glassfish/${glassfish.version}/glassfish-${glassfish.version}.zip</cargo.maven.containerUrl>
-      </properties>
-      <build>
-        <plugins>
-          <plugin>
-            <groupId>org.codehaus.cargo</groupId>
-            <artifactId>cargo-maven3-plugin</artifactId>
-            <configuration>
-              <container>
-                <containerId>${cargo.maven.containerId}</containerId>
-                <type>installed</type>
-                <zipUrlInstaller>
-                  <url>${cargo.maven.containerUrl}</url>
-                </zipUrlInstaller>
-              </container>
-            </configuration>
-          </plugin>
-        </plugins>
-      </build>
-    </profile>
-    <profile>
-      <id>payara5</id>
-      <properties>
-        <payara.major-version>5</payara.major-version>
-        <payara.version>5.2022.5</payara.version>
-        <cargo.maven.containerId>payara</cargo.maven.containerId>
-        <cargo.maven.containerUrl>https://repo.maven.apache.org/maven2/fish/payara/distributions/payara/${payara.version}/payara-${payara.version}.zip</cargo.maven.containerUrl>
-        <cargo.startup.timeout>300000</cargo.startup.timeout>
-      </properties>
-      <build>
-        <plugins>
-          <plugin>
-            <groupId>org.codehaus.cargo</groupId>
-            <artifactId>cargo-maven3-plugin</artifactId>
-            <configuration>
-              <container>
-                <containerId>${cargo.maven.containerId}</containerId>
-                <type>installed</type>
-                <zipUrlInstaller>
-                  <url>${cargo.maven.containerUrl}</url>
-                </zipUrlInstaller>
-              </container>
-            </configuration>
-          </plugin>
-        </plugins>
-      </build>
-    </profile>
-    <profile>
-      <id>resin</id>
-      <properties>
-        <resin.major-version>4</resin.major-version>
-        <resin.version>4.0.67</resin.version>
-        <cargo.maven.containerId>resin${resin.major-version}x</cargo.maven.containerId>
-        <!-- Do not use https as the certificate is bad which prevents this from working! -->
-        <cargo.maven.containerUrl>http://caucho.com/download/resin-${resin.version}.zip</cargo.maven.containerUrl>
-      </properties>
-      <build>
-        <plugins>
-          <plugin>
-            <groupId>org.apache.maven.plugins</groupId>
-            <artifactId>maven-war-plugin</artifactId>
-            <configuration>
-              <packagingExcludes>WEB-INF/beans.xml</packagingExcludes>
-            </configuration>
-          </plugin>
-          <plugin>
-            <groupId>org.codehaus.cargo</groupId>
-            <artifactId>cargo-maven3-plugin</artifactId>
-            <configuration>
-              <container>
-                <containerId>${cargo.maven.containerId}</containerId>
-                <type>installed</type>
-                <zipUrlInstaller>
-                  <url>${cargo.maven.containerUrl}</url>
-                </zipUrlInstaller>
-              </container>
-            </configuration>
-          </plugin>
-        </plugins>
-      </build>
-    </profile>
-  </profiles>
 
 </project>
