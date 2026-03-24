@@ -1,9 +1,34 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+<!--
+
+       Copyright 2010-2026 the original author or authors.
+
+       Licensed under the Apache License, Version 2.0 (the "License");
+       you may not use this file except in compliance with the License.
+       You may obtain a copy of the License at
+
+          https://www.apache.org/licenses/LICENSE-2.0
+
+       Unless required by applicable law or agreed to in writing, software
+       distributed under the License is distributed on an "AS IS" BASIS,
+       WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+       See the License for the specific language governing permissions and
+       limitations under the License.
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
 
   <modelVersion>4.0.0</modelVersion>
 
+  <!--
+    Parent: jpetstore-parent (multi-module reactor parent)
+    The parent POM imports the Spring Boot 3.5.12 BOM, Spring Cloud BOM,
+    Testcontainers BOM (1.20.4), and manages common dependency versions
+    (PostgreSQL 42.7.5, Liquibase, etc.).
+    All Spring Boot starter dependencies are BOM-managed — no version tags needed.
+  -->
   <parent>
     <groupId>org.mybatis</groupId>
     <artifactId>jpetstore-parent</artifactId>
@@ -15,62 +40,105 @@
   <packaging>jar</packaging>
 
   <name>JPetStore Order Service</name>
-  <description>Order/Cart Management microservice with Saga orchestration for JPetStore</description>
+  <description>Order/Cart bounded context microservice for JPetStore — manages orders, order status,
+    line items, and externalized cart state via Saga orchestration pattern, backed by Spring Data JPA,
+    PostgreSQL, and Redis for cart state externalization. Communicates with Account Service and
+    Catalog Service via REST for user verification and inventory reservation.</description>
+
+  <properties>
+    <java.version>17</java.version>
+  </properties>
 
   <dependencies>
-    <!-- Spring Boot Starters -->
+
+    <!-- ========================================== -->
+    <!-- Spring Boot Starters (BOM-managed versions) -->
+    <!-- ========================================== -->
+
+    <!-- REST API endpoints + embedded Tomcat for OrderController, CartController -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-web</artifactId>
     </dependency>
+
+    <!-- Spring Data JPA + Hibernate for Order, OrderStatus, LineItem, CartState entities
+         Replaces MyBatis mappers (OrderMapper, LineItemMapper, SequenceMapper) from the monolith -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-data-jpa</artifactId>
     </dependency>
+
+    <!-- Spring Data Redis for externalized cart state (CartStateService, CartStateRepository)
+         Replaces HTTP session-scoped Cart object from CartActionBean in the monolith.
+         Also used for Saga state caching during distributed order transactions. -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-data-redis</artifactId>
     </dependency>
+
+    <!-- Jakarta Bean Validation for request DTOs (OrderRequest, CartDTO, CartItemDTO) -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-validation</artifactId>
     </dependency>
+
+    <!-- Health checks, metrics, and readiness probes for container orchestration -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
 
+    <!-- ======== -->
     <!-- Database -->
+    <!-- ======== -->
+
+    <!-- PostgreSQL JDBC driver — per-service database (jpetstore_order)
+         Replaces monolith's shared HSQLDB. Tables: orders, orderstatus, lineitem.
+         Uses PostgreSQL native sequences instead of the monolith's sequence table. -->
     <dependency>
       <groupId>org.postgresql</groupId>
       <artifactId>postgresql</artifactId>
       <scope>runtime</scope>
     </dependency>
+
+    <!-- Liquibase for database schema management via XML changelogs
+         Manages orders, orderstatus, lineitem tables and order_id_seq sequence -->
     <dependency>
       <groupId>org.liquibase</groupId>
       <artifactId>liquibase-core</artifactId>
     </dependency>
 
-    <!-- Test -->
+    <!-- ======= -->
+    <!-- Testing -->
+    <!-- ======= -->
+
+    <!-- JUnit 5, Mockito, AssertJ, Spring Test support -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>
       <scope>test</scope>
     </dependency>
+
+    <!-- Testcontainers PostgreSQL for integration tests against real database -->
     <dependency>
       <groupId>org.testcontainers</groupId>
       <artifactId>postgresql</artifactId>
       <scope>test</scope>
     </dependency>
+
+    <!-- Testcontainers JUnit 5 integration for lifecycle management -->
     <dependency>
       <groupId>org.testcontainers</groupId>
       <artifactId>junit-jupiter</artifactId>
       <scope>test</scope>
     </dependency>
+
   </dependencies>
 
   <build>
     <plugins>
+      <!-- Spring Boot Maven Plugin — builds executable JAR with embedded Tomcat
+           Inherited plugin version from parent's pluginManagement (3.5.12) -->
       <plugin>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>
