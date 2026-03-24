@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- ===================================================================== -->
+    <!-- Liquibase Master Changelog — Account Service                          -->
+    <!-- ===================================================================== -->
+    <!-- This is the single entry point referenced by the Spring Boot config   -->
+    <!-- property spring.liquibase.change-log in application.yml.              -->
+    <!--                                                                       -->
+    <!-- Hibernate ddl-auto is set to 'validate' — all schema changes are      -->
+    <!-- managed exclusively through Liquibase changelogs listed below.         -->
+    <!--                                                                       -->
+    <!-- Owned tables: account, profile, signon, bannerdata                    -->
+    <!-- Target database: PostgreSQL (jpetstore_account)                       -->
+    <!-- ===================================================================== -->
+
+    <!-- Initial schema: creates the 4 Account/User Management bounded context -->
+    <!-- tables (signon, account, profile, bannerdata) in PostgreSQL.          -->
+    <include file="db/changelog/001-initial-schema.xml"/>
+
+</databaseChangeLog>
