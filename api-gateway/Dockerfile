@@ -21,13 +21,15 @@
 # Java    : 17 (required by Spring Boot 3.5.x)
 # Port    : 8080 (single public entry point for all JPetStore services)
 #
-# Build context : api-gateway/ directory
-# Usage         : docker build -t jpetstore-api-gateway .
+# Build context : Repository root (.) — set via docker-compose.yml
+#   docker-compose.yml specifies:
+#     build:
+#       context: .
+#       dockerfile: api-gateway/Dockerfile
 #
-# NOTE: This module references a parent POM (jpetstore-parent). Ensure the
-# parent POM is installed in the local Maven repository or accessible from
-# a configured Maven repository before building this image. In a CI/CD
-# pipeline, run `mvn install -N` at the project root first.
+# This ensures the parent POM and all module sources are accessible during
+# the Docker build. The api-gateway module is built using the multi-module
+# Maven project structure with -pl api-gateway -am flags.
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -37,24 +39,25 @@ FROM maven:3.9-eclipse-temurin-17 AS build
 
 WORKDIR /app
 
-# Copy POM first for Docker layer caching of dependencies.
-# This layer is only rebuilt when pom.xml changes, saving significant
-# build time on iterative source code changes.
-COPY pom.xml .
+# Copy the parent POM and api-gateway POM first for Docker layer caching of
+# dependencies. This layer is only rebuilt when POM files change, saving
+# significant build time on iterative source code changes.
+COPY pom.xml ./pom.xml
+COPY api-gateway/pom.xml ./api-gateway/pom.xml
 
 # Download all dependencies into the local Maven cache (cached layer).
-# The '|| true' fallback allows the build to continue if the parent POM
-# is not yet published; the subsequent 'package' phase will resolve any
-# remaining dependencies.
-RUN mvn dependency:go-offline -B || true
+# Uses -pl api-gateway -am to resolve the parent POM and api-gateway deps.
+RUN mvn dependency:go-offline -B -pl api-gateway -am || true
 
-# Copy application source code
-COPY src/ src/
+# Copy api-gateway application source code
+COPY api-gateway/src/ ./api-gateway/src/
 
 # Build the executable Spring Boot JAR.
+# -pl api-gateway : Build only the api-gateway module
+# -am             : Also build any modules that api-gateway depends on (parent)
 # Tests are skipped here — they are executed separately in the CI pipeline.
-RUN mvn clean package -DskipTests -B \
-    && mv target/*.jar target/app.jar
+RUN mvn clean package -DskipTests -B -pl api-gateway -am \
+    && mv api-gateway/target/*.jar api-gateway/target/app.jar
 
 # -----------------------------------------------------------------------------
 # Stage 2: RUNTIME — Minimal JRE image for production deployment
@@ -80,7 +83,7 @@ RUN apt-get update \
 WORKDIR /app
 
 # Copy the built JAR from the build stage
-COPY --from=build /app/target/app.jar app.jar
+COPY --from=build /app/api-gateway/target/app.jar app.jar
 
 # Set file ownership to the non-root application user
 RUN chown appuser:appgroup app.jar

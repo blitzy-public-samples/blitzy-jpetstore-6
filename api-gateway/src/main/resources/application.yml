@@ -147,11 +147,15 @@ spring:
   # Redis is used for storing routing flags (Strangler Fig per-service flags)
   # and can also store externalized session/cart state.
   # Defaults use Docker Compose service name 'redis', overridable via env vars.
+  # Docker Compose sets SPRING_DATA_REDIS_HOST and SPRING_DATA_REDIS_PORT, which
+  # Spring Boot's relaxed binding automatically maps to spring.data.redis.host/port.
+  # The env var placeholders below use the same SPRING_DATA_REDIS_* naming convention
+  # for consistency with the docker-compose.yml environment block.
   # ---------------------------------------------------------------------------
   data:
     redis:
-      host: ${REDIS_HOST:redis}
-      port: ${REDIS_PORT:6379}
+      host: ${SPRING_DATA_REDIS_HOST:redis}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
       timeout: 2000
 
 # =============================================================================

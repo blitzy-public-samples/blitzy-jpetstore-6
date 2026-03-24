@@ -143,7 +143,7 @@ Running the original JPetStore monolith under Tomcat (using the [cargo-maven2-pl
 - Startup the Tomcat server and deploy web application
 
   ```
-  $ ./mvnw cargo:run -P tomcat90 -pl monolith
+  $ ./mvnw cargo:run -P tomcat9 -pl monolith
   ```
 
   > Note:
@@ -152,7 +152,7 @@ Running the original JPetStore monolith under Tomcat (using the [cargo-maven2-pl
   >
   > | Profile        | Description |
   > | -------------- | ----------- |
-  > | tomcat90       | Running under the Tomcat 9.0 |
+  > | tomcat9        | Running under the Tomcat 9.0 |
   > | tomee80        | Running under the TomEE 8.0(Java EE 8) |
   > | wildfly26      | Running under the WildFly 26(Java EE 8) |
   > | liberty-ee8    | Running under the WebSphere Liberty(Java EE 8) |
@@ -246,7 +246,7 @@ Run the monolith's unit and mapper tests (against embedded HSQLDB):
 Perform integration tests for screen transition (Selenide-based):
 
 ```bash
-./mvnw clean verify -P tomcat90 -pl monolith
+./mvnw clean verify -P tomcat9 -pl monolith
 ```
 
 ### Microservice Tests
