@@ -1,0 +1,206 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Liquibase Initial Schema for Catalog/Inventory Bounded Context.
+
+    Defines the 5 tables owned by the Catalog Service:
+      1. supplier  - Product suppliers
+      2. category  - Product categories
+      3. product   - Products (FK to category)
+      4. item      - Purchasable items (FK to product and supplier)
+      5. inventory  - Item inventory quantities with optimistic locking version
+
+    Derived from the monolith's jpetstore-hsqldb-schema.sql with the following
+    HSQLDB → PostgreSQL type mappings applied:
+      - int          → integer
+      - decimal(p,s) → numeric(p,s)
+      - varchar(n)   → varchar(n) (unchanged)
+
+    Column names are preserved as-is from the original HSQLDB schema (already lowercase).
+    The only addition is the `version` column on the `inventory` table for JPA @Version
+    optimistic locking, replacing the non-atomic MyBatis inventory decrement pattern.
+
+    All intra-service foreign keys are preserved as database-level constraints.
+    No cross-service foreign keys (to account or order tables) are present.
+-->
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- ======================================================================
+         Changeset 1: Create supplier table
+         Source: jpetstore-hsqldb-schema.sql lines 17-28
+         Columns: suppid (PK), name, status, addr1, addr2, city, state, zip, phone
+         ====================================================================== -->
+    <changeSet id="001-create-supplier" author="jpetstore-migration">
+        <createTable tableName="supplier">
+            <column name="suppid" type="integer">
+                <constraints nullable="false" primaryKey="true" primaryKeyName="pk_supplier"/>
+            </column>
+            <column name="name" type="varchar(80)"/>
+            <column name="status" type="varchar(2)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="addr1" type="varchar(80)"/>
+            <column name="addr2" type="varchar(80)"/>
+            <column name="city" type="varchar(80)"/>
+            <column name="state" type="varchar(80)"/>
+            <column name="zip" type="varchar(5)"/>
+            <column name="phone" type="varchar(80)"/>
+        </createTable>
+        <rollback>
+            <dropTable tableName="supplier"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ======================================================================
+         Changeset 2: Create category table
+         Source: jpetstore-hsqldb-schema.sql lines 113-118
+         Columns: catid (PK), name, descn
+         Referenced by: product.category via fk_product_1
+         ====================================================================== -->
+    <changeSet id="001-create-category" author="jpetstore-migration">
+        <createTable tableName="category">
+            <column name="catid" type="varchar(10)">
+                <constraints nullable="false" primaryKey="true" primaryKeyName="pk_category"/>
+            </column>
+            <column name="name" type="varchar(80)"/>
+            <column name="descn" type="varchar(255)"/>
+        </createTable>
+        <rollback>
+            <dropTable tableName="category"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ======================================================================
+         Changeset 3: Create product table with foreign key and indexes
+         Source: jpetstore-hsqldb-schema.sql lines 120-131
+         Columns: productid (PK), category (FK → category.catid), name, descn
+         FK: fk_product_1 (category → category.catid)
+         Indexes: productCat on product(category), productName on product(name)
+         ====================================================================== -->
+    <changeSet id="001-create-product" author="jpetstore-migration">
+        <createTable tableName="product">
+            <column name="productid" type="varchar(10)">
+                <constraints nullable="false" primaryKey="true" primaryKeyName="pk_product"/>
+            </column>
+            <column name="category" type="varchar(10)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="name" type="varchar(80)"/>
+            <column name="descn" type="varchar(255)"/>
+        </createTable>
+
+        <!-- Intra-service FK: product.category → category.catid -->
+        <addForeignKeyConstraint constraintName="fk_product_1"
+                                 baseTableName="product"
+                                 baseColumnNames="category"
+                                 referencedTableName="category"
+                                 referencedColumnNames="catid"/>
+
+        <!-- Index on product(category) for category-based lookups -->
+        <createIndex indexName="productCat" tableName="product">
+            <column name="category"/>
+        </createIndex>
+
+        <!-- Index on product(name) for name-based search -->
+        <createIndex indexName="productName" tableName="product">
+            <column name="name"/>
+        </createIndex>
+
+        <rollback>
+            <dropTable tableName="product"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ======================================================================
+         Changeset 4: Create item table with foreign keys and index
+         Source: jpetstore-hsqldb-schema.sql lines 133-152
+         Columns: itemid (PK), productid, listprice, unitcost, supplier,
+                  status, attr1-attr5
+         FKs: fk_item_1 (productid → product.productid),
+              fk_item_2 (supplier → supplier.suppid)
+         Index: itemProd on item(productid)
+
+         Type mappings applied:
+           - decimal(10,2) → numeric(10,2) for listprice and unitcost
+           - int → integer for supplier
+         ====================================================================== -->
+    <changeSet id="001-create-item" author="jpetstore-migration">
+        <createTable tableName="item">
+            <column name="itemid" type="varchar(10)">
+                <constraints nullable="false" primaryKey="true" primaryKeyName="pk_item"/>
+            </column>
+            <column name="productid" type="varchar(10)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="listprice" type="numeric(10,2)"/>
+            <column name="unitcost" type="numeric(10,2)"/>
+            <column name="supplier" type="integer"/>
+            <column name="status" type="varchar(2)"/>
+            <column name="attr1" type="varchar(80)"/>
+            <column name="attr2" type="varchar(80)"/>
+            <column name="attr3" type="varchar(80)"/>
+            <column name="attr4" type="varchar(80)"/>
+            <column name="attr5" type="varchar(80)"/>
+        </createTable>
+
+        <!-- Intra-service FK: item.productid → product.productid -->
+        <addForeignKeyConstraint constraintName="fk_item_1"
+                                 baseTableName="item"
+                                 baseColumnNames="productid"
+                                 referencedTableName="product"
+                                 referencedColumnNames="productid"/>
+
+        <!-- Intra-service FK: item.supplier → supplier.suppid -->
+        <addForeignKeyConstraint constraintName="fk_item_2"
+                                 baseTableName="item"
+                                 baseColumnNames="supplier"
+                                 referencedTableName="supplier"
+                                 referencedColumnNames="suppid"/>
+
+        <!-- Index on item(productid) for product-based lookups -->
+        <createIndex indexName="itemProd" tableName="item">
+            <column name="productid"/>
+        </createIndex>
+
+        <rollback>
+            <dropTable tableName="item"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ======================================================================
+         Changeset 5: Create inventory table with JPA @Version column
+         Source: jpetstore-hsqldb-schema.sql lines 154-158
+         Columns: itemid (PK), qty, version (NEW — for optimistic locking)
+
+         The `version` column is the ONLY addition to the original HSQLDB schema.
+         It supports JPA @Version optimistic locking on inventory decrement
+         operations, replacing the non-atomic MyBatis pattern:
+           UPDATE INVENTORY SET QTY = QTY - #{increment} WHERE ITEMID = #{itemId}
+         with Hibernate-managed optimistic concurrency control:
+           UPDATE inventory SET qty = ?, version = version + 1
+           WHERE itemid = ? AND version = ?
+
+         Note: No FK from inventory.itemid → item.itemid is defined here because
+         the original HSQLDB schema does not have this constraint.
+         ====================================================================== -->
+    <changeSet id="001-create-inventory" author="jpetstore-migration">
+        <createTable tableName="inventory">
+            <column name="itemid" type="varchar(10)">
+                <constraints nullable="false" primaryKey="true" primaryKeyName="pk_inventory"/>
+            </column>
+            <column name="qty" type="integer">
+                <constraints nullable="false"/>
+            </column>
+            <column name="version" type="integer" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <rollback>
+            <dropTable tableName="inventory"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
