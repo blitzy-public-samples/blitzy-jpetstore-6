@@ -109,6 +109,12 @@ spring:
           predicates:
             - Path=/api/orders/**
 
+        # Cart REST API (served by Order Service)
+        - id: cart-api
+          uri: http://order-service:8083
+          predicates:
+            - Path=/api/cart/**
+
         # =====================================================================
         # 3. STATIC ASSET ROUTES
         # =====================================================================
@@ -182,7 +188,7 @@ routing:
 # for production deployments.
 # =============================================================================
 jwt:
-  secret: ${JWT_SECRET:changeme-in-production}
+  secret: ${JWT_SECRET:jpetstore-gateway-default-secret-key-change-in-production}
   issuer: jpetstore
   expiration: 3600
 

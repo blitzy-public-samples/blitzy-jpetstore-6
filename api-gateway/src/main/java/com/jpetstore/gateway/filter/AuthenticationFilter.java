@@ -21,9 +21,12 @@ import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
 import java.util.List;
 
 import javax.crypto.SecretKey;
+
+import jakarta.annotation.PostConstruct;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,6 +39,9 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.http.server.reactive.ServerHttpResponse;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.ReactiveSecurityContextHolder;
+import org.springframework.security.core.context.SecurityContextImpl;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
 
@@ -115,7 +121,7 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
      */
     private static final List<String> PROTECTED_PATH_PREFIXES = List.of(
             "/actions/Order.action",
-            "/api/orders/"
+            "/api/orders"
     );
 
     // -------------------------------------------------------------------------
@@ -159,7 +165,7 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
      * The default value is for development/testing only — MUST be overridden
      * via {@code JWT_SECRET} environment variable in production.
      */
-    @Value("${jwt.secret:changeme-in-production}")
+    @Value("${jwt.secret:jpetstore-gateway-default-secret-key-change-in-production}")
     private String jwtSecret;
 
     /**
@@ -169,6 +175,28 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
      */
     @Value("${jwt.issuer:jpetstore}")
     private String jwtIssuer;
+
+    /**
+     * Cached HMAC-SHA signing key for JWT signature verification.
+     *
+     * <p>Initialized once in {@link #initSecretKey()} to avoid the overhead of
+     * recreating the {@link SecretKey} from the raw string on every gateway
+     * request. HMAC key construction involves byte array allocation and
+     * cryptographic object creation that is unnecessary to repeat per-request.</p>
+     */
+    private SecretKey cachedSecretKey;
+
+    /**
+     * Initializes the cached {@link SecretKey} from the configured JWT secret string.
+     *
+     * <p>Called once after dependency injection is complete. All subsequent JWT
+     * validation operations use this cached key instance.</p>
+     */
+    @PostConstruct
+    protected void initSecretKey() {
+        this.cachedSecretKey = Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
+        log.info("JWT SecretKey initialized and cached for gateway authentication filter");
+    }
 
     // -------------------------------------------------------------------------
     // Ordered Interface Implementation
@@ -238,12 +266,12 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
 
         // Token found — validate and extract claims
         try {
-            SecretKey key = Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
-
+            // Use the cached SecretKey (initialized once in @PostConstruct) to avoid
+            // per-request key construction overhead in a gateway processing all traffic.
             // JJWT 0.12.6 API: parser() → verifyWith() → requireIssuer() → build()
             //                   → parseSignedClaims() → getPayload()
             Claims claims = Jwts.parser()
-                    .verifyWith(key)
+                    .verifyWith(cachedSecretKey)
                     .requireIssuer(jwtIssuer)
                     .build()
                     .parseSignedClaims(token)
@@ -263,7 +291,22 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
                     .header(AUTH_HEADER_ACCOUNT_ID, accountId != null ? accountId : "")
                     .build();
 
-            return chain.filter(exchange.mutate().request(mutatedRequest).build());
+            // Populate the ReactiveSecurityContext so that Spring Security's
+            // .authenticated() check on protected paths succeeds. Without this,
+            // SecurityConfig's .authenticated() matcher finds no Authentication
+            // object and returns 401 even for valid JWT tokens.
+            UsernamePasswordAuthenticationToken authentication =
+                    new UsernamePasswordAuthenticationToken(
+                            username,
+                            null,
+                            Collections.emptyList()
+                    );
+            SecurityContextImpl securityContext = new SecurityContextImpl(authentication);
+
+            return chain.filter(exchange.mutate().request(mutatedRequest).build())
+                    .contextWrite(ReactiveSecurityContextHolder.withSecurityContext(
+                            Mono.just(securityContext)
+                    ));
 
         } catch (JwtException e) {
             // JWT validation failed — expired, invalid signature, malformed, wrong issuer, etc.

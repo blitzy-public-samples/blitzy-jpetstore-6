@@ -58,15 +58,21 @@ public final class SchemaMapper {
 
     /**
      * Internal metadata record for a single column definition.
-     * Serves as the single source of truth for column name, HSQLDB type,
+     * Serves as the single source of truth for column names, HSQLDB type,
      * PostgreSQL type, and nullability.
      *
-     * @param name       column name (lowercase, as defined in HSQLDB schema.sql)
+     * <p>For Account and Catalog bounded context tables, {@code hsqldbName} and
+     * {@code pgName} are identical (HSQLDB-compatible lowercase names). For Order
+     * bounded context tables, {@code pgName} uses proper snake_case as defined
+     * in the Order Service Liquibase schema (e.g., {@code orderid} → {@code order_id}).</p>
+     *
+     * @param hsqldbName HSQLDB column name (lowercase, as defined in schema.sql)
+     * @param pgName     PostgreSQL target column name (may differ from hsqldbName for Order tables)
      * @param hsqldbType HSQLDB data type declaration (e.g., "varchar(80)", "int", "decimal(10,2)")
      * @param pgType     corresponding PostgreSQL data type (e.g., "varchar(80)", "integer", "numeric(10,2)")
      * @param nullable   true if the column allows NULL values
      */
-    private record ColDef(String name, String hsqldbType, String pgType, boolean nullable) {}
+    private record ColDef(String hsqldbName, String pgName, String hsqldbType, String pgType, boolean nullable) {}
 
     // ==========================================
     // Database Name Constants
@@ -167,134 +173,139 @@ public final class SchemaMapper {
         HashMap<String, List<ColDef>> colMap = new HashMap<>();
 
         // --- Account DB tables ---
+        // Account and Catalog tables use HSQLDB-identical column names in PostgreSQL
+        // (hsqldbName == pgName). Only Order tables use snake_case renames.
 
         colMap.put("signon", List.of(
-                new ColDef("username", "varchar(25)", "varchar(25)", false),
-                new ColDef("password", "varchar(25)", "varchar(25)", false)
+                new ColDef("username", "username", "varchar(25)", "varchar(25)", false),
+                new ColDef("password", "password", "varchar(25)", "varchar(25)", false)
         ));
 
         colMap.put("account", List.of(
-                new ColDef("userid", "varchar(80)", "varchar(80)", false),
-                new ColDef("email", "varchar(80)", "varchar(80)", false),
-                new ColDef("firstname", "varchar(80)", "varchar(80)", false),
-                new ColDef("lastname", "varchar(80)", "varchar(80)", false),
-                new ColDef("status", "varchar(2)", "varchar(2)", true),
-                new ColDef("addr1", "varchar(80)", "varchar(80)", false),
-                new ColDef("addr2", "varchar(40)", "varchar(40)", true),
-                new ColDef("city", "varchar(80)", "varchar(80)", false),
-                new ColDef("state", "varchar(80)", "varchar(80)", false),
-                new ColDef("zip", "varchar(20)", "varchar(20)", false),
-                new ColDef("country", "varchar(20)", "varchar(20)", false),
-                new ColDef("phone", "varchar(80)", "varchar(80)", false)
+                new ColDef("userid", "userid", "varchar(80)", "varchar(80)", false),
+                new ColDef("email", "email", "varchar(80)", "varchar(80)", false),
+                new ColDef("firstname", "firstname", "varchar(80)", "varchar(80)", false),
+                new ColDef("lastname", "lastname", "varchar(80)", "varchar(80)", false),
+                new ColDef("status", "status", "varchar(2)", "varchar(2)", true),
+                new ColDef("addr1", "addr1", "varchar(80)", "varchar(80)", false),
+                new ColDef("addr2", "addr2", "varchar(40)", "varchar(40)", true),
+                new ColDef("city", "city", "varchar(80)", "varchar(80)", false),
+                new ColDef("state", "state", "varchar(80)", "varchar(80)", false),
+                new ColDef("zip", "zip", "varchar(20)", "varchar(20)", false),
+                new ColDef("country", "country", "varchar(20)", "varchar(20)", false),
+                new ColDef("phone", "phone", "varchar(80)", "varchar(80)", false)
         ));
 
         colMap.put("profile", List.of(
-                new ColDef("userid", "varchar(80)", "varchar(80)", false),
-                new ColDef("langpref", "varchar(80)", "varchar(80)", false),
-                new ColDef("favcategory", "varchar(30)", "varchar(30)", true),
-                new ColDef("mylistopt", "int", "integer", true),
-                new ColDef("banneropt", "int", "integer", true)
+                new ColDef("userid", "userid", "varchar(80)", "varchar(80)", false),
+                new ColDef("langpref", "langpref", "varchar(80)", "varchar(80)", false),
+                new ColDef("favcategory", "favcategory", "varchar(30)", "varchar(30)", true),
+                new ColDef("mylistopt", "mylistopt", "int", "integer", true),
+                new ColDef("banneropt", "banneropt", "int", "integer", true)
         ));
 
         colMap.put("bannerdata", List.of(
-                new ColDef("favcategory", "varchar(80)", "varchar(80)", false),
-                new ColDef("bannername", "varchar(255)", "varchar(255)", true)
+                new ColDef("favcategory", "favcategory", "varchar(80)", "varchar(80)", false),
+                new ColDef("bannername", "bannername", "varchar(255)", "varchar(255)", true)
         ));
 
         // --- Catalog DB tables ---
 
         colMap.put("supplier", List.of(
-                new ColDef("suppid", "int", "integer", false),
-                new ColDef("name", "varchar(80)", "varchar(80)", true),
-                new ColDef("status", "varchar(2)", "varchar(2)", false),
-                new ColDef("addr1", "varchar(80)", "varchar(80)", true),
-                new ColDef("addr2", "varchar(80)", "varchar(80)", true),
-                new ColDef("city", "varchar(80)", "varchar(80)", true),
-                new ColDef("state", "varchar(80)", "varchar(80)", true),
-                new ColDef("zip", "varchar(5)", "varchar(5)", true),
-                new ColDef("phone", "varchar(80)", "varchar(80)", true)
+                new ColDef("suppid", "suppid", "int", "integer", false),
+                new ColDef("name", "name", "varchar(80)", "varchar(80)", true),
+                new ColDef("status", "status", "varchar(2)", "varchar(2)", false),
+                new ColDef("addr1", "addr1", "varchar(80)", "varchar(80)", true),
+                new ColDef("addr2", "addr2", "varchar(80)", "varchar(80)", true),
+                new ColDef("city", "city", "varchar(80)", "varchar(80)", true),
+                new ColDef("state", "state", "varchar(80)", "varchar(80)", true),
+                new ColDef("zip", "zip", "varchar(5)", "varchar(5)", true),
+                new ColDef("phone", "phone", "varchar(80)", "varchar(80)", true)
         ));
 
         colMap.put("category", List.of(
-                new ColDef("catid", "varchar(10)", "varchar(10)", false),
-                new ColDef("name", "varchar(80)", "varchar(80)", true),
-                new ColDef("descn", "varchar(255)", "varchar(255)", true)
+                new ColDef("catid", "catid", "varchar(10)", "varchar(10)", false),
+                new ColDef("name", "name", "varchar(80)", "varchar(80)", true),
+                new ColDef("descn", "descn", "varchar(255)", "varchar(255)", true)
         ));
 
         colMap.put("product", List.of(
-                new ColDef("productid", "varchar(10)", "varchar(10)", false),
-                new ColDef("category", "varchar(10)", "varchar(10)", false),
-                new ColDef("name", "varchar(80)", "varchar(80)", true),
-                new ColDef("descn", "varchar(255)", "varchar(255)", true)
+                new ColDef("productid", "productid", "varchar(10)", "varchar(10)", false),
+                new ColDef("category", "category", "varchar(10)", "varchar(10)", false),
+                new ColDef("name", "name", "varchar(80)", "varchar(80)", true),
+                new ColDef("descn", "descn", "varchar(255)", "varchar(255)", true)
         ));
 
         colMap.put("item", List.of(
-                new ColDef("itemid", "varchar(10)", "varchar(10)", false),
-                new ColDef("productid", "varchar(10)", "varchar(10)", false),
-                new ColDef("listprice", "decimal(10,2)", "numeric(10,2)", true),
-                new ColDef("unitcost", "decimal(10,2)", "numeric(10,2)", true),
-                new ColDef("supplier", "int", "integer", true),
-                new ColDef("status", "varchar(2)", "varchar(2)", true),
-                new ColDef("attr1", "varchar(80)", "varchar(80)", true),
-                new ColDef("attr2", "varchar(80)", "varchar(80)", true),
-                new ColDef("attr3", "varchar(80)", "varchar(80)", true),
-                new ColDef("attr4", "varchar(80)", "varchar(80)", true),
-                new ColDef("attr5", "varchar(80)", "varchar(80)", true)
+                new ColDef("itemid", "itemid", "varchar(10)", "varchar(10)", false),
+                new ColDef("productid", "productid", "varchar(10)", "varchar(10)", false),
+                new ColDef("listprice", "listprice", "decimal(10,2)", "numeric(10,2)", true),
+                new ColDef("unitcost", "unitcost", "decimal(10,2)", "numeric(10,2)", true),
+                new ColDef("supplier", "supplier", "int", "integer", true),
+                new ColDef("status", "status", "varchar(2)", "varchar(2)", true),
+                new ColDef("attr1", "attr1", "varchar(80)", "varchar(80)", true),
+                new ColDef("attr2", "attr2", "varchar(80)", "varchar(80)", true),
+                new ColDef("attr3", "attr3", "varchar(80)", "varchar(80)", true),
+                new ColDef("attr4", "attr4", "varchar(80)", "varchar(80)", true),
+                new ColDef("attr5", "attr5", "varchar(80)", "varchar(80)", true)
         ));
 
         colMap.put("inventory", List.of(
-                new ColDef("itemid", "varchar(10)", "varchar(10)", false),
-                new ColDef("qty", "int", "integer", false)
+                new ColDef("itemid", "itemid", "varchar(10)", "varchar(10)", false),
+                new ColDef("qty", "qty", "int", "integer", false)
         ));
 
         // --- Order DB tables ---
+        // Order Service Liquibase schema uses snake_case column names that differ
+        // from the original HSQLDB names. The hsqldbName preserves the source name
+        // for data export, while pgName matches the Order Service Liquibase schema.
 
         colMap.put("sequence", List.of(
-                new ColDef("name", "varchar(30)", "varchar(30)", false),
-                new ColDef("nextid", "int", "integer", false)
+                new ColDef("name", "name", "varchar(30)", "varchar(30)", false),
+                new ColDef("nextid", "nextid", "int", "integer", false)
         ));
 
         colMap.put("orders", List.of(
-                new ColDef("orderid", "int", "integer", false),
-                new ColDef("userid", "varchar(80)", "varchar(80)", false),
-                new ColDef("orderdate", "date", "timestamp with time zone", false),
-                new ColDef("shipaddr1", "varchar(80)", "varchar(80)", false),
-                new ColDef("shipaddr2", "varchar(80)", "varchar(80)", true),
-                new ColDef("shipcity", "varchar(80)", "varchar(80)", false),
-                new ColDef("shipstate", "varchar(80)", "varchar(80)", false),
-                new ColDef("shipzip", "varchar(20)", "varchar(20)", false),
-                new ColDef("shipcountry", "varchar(20)", "varchar(20)", false),
-                new ColDef("billaddr1", "varchar(80)", "varchar(80)", false),
-                new ColDef("billaddr2", "varchar(80)", "varchar(80)", true),
-                new ColDef("billcity", "varchar(80)", "varchar(80)", false),
-                new ColDef("billstate", "varchar(80)", "varchar(80)", false),
-                new ColDef("billzip", "varchar(20)", "varchar(20)", false),
-                new ColDef("billcountry", "varchar(20)", "varchar(20)", false),
-                new ColDef("courier", "varchar(80)", "varchar(80)", false),
-                new ColDef("totalprice", "decimal(10,2)", "numeric(10,2)", false),
-                new ColDef("billtofirstname", "varchar(80)", "varchar(80)", false),
-                new ColDef("billtolastname", "varchar(80)", "varchar(80)", false),
-                new ColDef("shiptofirstname", "varchar(80)", "varchar(80)", false),
-                new ColDef("shiptolastname", "varchar(80)", "varchar(80)", false),
-                new ColDef("creditcard", "varchar(80)", "varchar(80)", false),
-                new ColDef("exprdate", "varchar(7)", "varchar(7)", false),
-                new ColDef("cardtype", "varchar(80)", "varchar(80)", false),
-                new ColDef("locale", "varchar(80)", "varchar(80)", false)
+                new ColDef("orderid", "order_id", "int", "integer", false),
+                new ColDef("userid", "username", "varchar(80)", "varchar(80)", false),
+                new ColDef("orderdate", "order_date", "date", "timestamp with time zone", false),
+                new ColDef("shipaddr1", "ship_addr1", "varchar(80)", "varchar(80)", false),
+                new ColDef("shipaddr2", "ship_addr2", "varchar(80)", "varchar(80)", true),
+                new ColDef("shipcity", "ship_city", "varchar(80)", "varchar(80)", false),
+                new ColDef("shipstate", "ship_state", "varchar(80)", "varchar(80)", false),
+                new ColDef("shipzip", "ship_zip", "varchar(20)", "varchar(20)", false),
+                new ColDef("shipcountry", "ship_country", "varchar(20)", "varchar(20)", false),
+                new ColDef("billaddr1", "bill_addr1", "varchar(80)", "varchar(80)", false),
+                new ColDef("billaddr2", "bill_addr2", "varchar(80)", "varchar(80)", true),
+                new ColDef("billcity", "bill_city", "varchar(80)", "varchar(80)", false),
+                new ColDef("billstate", "bill_state", "varchar(80)", "varchar(80)", false),
+                new ColDef("billzip", "bill_zip", "varchar(20)", "varchar(20)", false),
+                new ColDef("billcountry", "bill_country", "varchar(20)", "varchar(20)", false),
+                new ColDef("courier", "courier", "varchar(80)", "varchar(80)", false),
+                new ColDef("totalprice", "total_price", "decimal(10,2)", "numeric(10,2)", false),
+                new ColDef("billtofirstname", "bill_to_first_name", "varchar(80)", "varchar(80)", false),
+                new ColDef("billtolastname", "bill_to_last_name", "varchar(80)", "varchar(80)", false),
+                new ColDef("shiptofirstname", "ship_to_first_name", "varchar(80)", "varchar(80)", false),
+                new ColDef("shiptolastname", "ship_to_last_name", "varchar(80)", "varchar(80)", false),
+                new ColDef("creditcard", "credit_card", "varchar(80)", "varchar(80)", false),
+                new ColDef("exprdate", "expr_date", "varchar(7)", "varchar(7)", false),
+                new ColDef("cardtype", "card_type", "varchar(80)", "varchar(80)", false),
+                new ColDef("locale", "locale", "varchar(80)", "varchar(80)", false)
         ));
 
         colMap.put("orderstatus", List.of(
-                new ColDef("orderid", "int", "integer", false),
-                new ColDef("linenum", "int", "integer", false),
-                new ColDef("timestamp", "date", "timestamp with time zone", false),
-                new ColDef("status", "varchar(2)", "varchar(2)", false)
+                new ColDef("orderid", "order_id", "int", "integer", false),
+                new ColDef("linenum", "line_num", "int", "integer", false),
+                new ColDef("timestamp", "timestamp", "date", "timestamp with time zone", false),
+                new ColDef("status", "status", "varchar(2)", "varchar(2)", false)
         ));
 
         colMap.put("lineitem", List.of(
-                new ColDef("orderid", "int", "integer", false),
-                new ColDef("linenum", "int", "integer", false),
-                new ColDef("itemid", "varchar(10)", "varchar(10)", false),
-                new ColDef("quantity", "int", "integer", false),
-                new ColDef("unitprice", "decimal(10,2)", "numeric(10,2)", false)
+                new ColDef("orderid", "order_id", "int", "integer", false),
+                new ColDef("linenum", "line_num", "int", "integer", false),
+                new ColDef("itemid", "item_id", "varchar(10)", "varchar(10)", false),
+                new ColDef("quantity", "quantity", "int", "integer", false),
+                new ColDef("unitprice", "unit_price", "decimal(10,2)", "numeric(10,2)", false)
         ));
 
         TABLE_COLUMNS = Map.copyOf(colMap);
@@ -310,9 +321,9 @@ public final class SchemaMapper {
         pkMap.put("account", List.of("userid"));
         pkMap.put("profile", List.of("userid"));
         pkMap.put("bannerdata", List.of("favcategory"));
-        pkMap.put("orders", List.of("orderid"));
-        pkMap.put("orderstatus", Collections.unmodifiableList(Arrays.asList("orderid", "linenum")));
-        pkMap.put("lineitem", Collections.unmodifiableList(Arrays.asList("orderid", "linenum")));
+        pkMap.put("orders", List.of("order_id"));
+        pkMap.put("orderstatus", Collections.unmodifiableList(Arrays.asList("order_id", "line_num")));
+        pkMap.put("lineitem", Collections.unmodifiableList(Arrays.asList("order_id", "line_num")));
         pkMap.put("category", List.of("catid"));
         pkMap.put("product", List.of("productid"));
         pkMap.put("item", List.of("itemid"));
@@ -333,9 +344,11 @@ public final class SchemaMapper {
 
         // Cross-service FKs: span database boundaries (Order DB -> Catalog DB, Order DB -> Account DB).
         // These are removed as database constraints and enforced at the application layer only.
+        // Source columns use Order DB PostgreSQL names (snake_case); target columns use
+        // Account/Catalog DB PostgreSQL names (HSQLDB-identical).
         CROSS_SERVICE_FKS = List.of(
-                new ForeignKey("lineitem", "itemid", "item", "itemid", true),
-                new ForeignKey("orders", "userid", "account", "userid", true)
+                new ForeignKey("lineitem", "item_id", "item", "itemid", true),
+                new ForeignKey("orders", "username", "account", "userid", true)
         );
 
         // Combined list of all FKs (5 total: 3 intra-service + 2 cross-service)
@@ -455,8 +468,11 @@ public final class SchemaMapper {
      *
      * <p>The returned map preserves column definition order (insertion order) from the
      * original schema.sql. Keys are the HSQLDB column names (lowercase) and values
-     * are the corresponding PostgreSQL column names (also lowercase -- the mapping is
-     * identity since the actual schema uses lowercase names throughout).</p>
+     * are the corresponding PostgreSQL column names. For Account and Catalog bounded
+     * context tables, the mapping is identity (names are unchanged). For Order bounded
+     * context tables, the PostgreSQL names use proper snake_case as defined in the
+     * Order Service Liquibase schema (e.g., {@code orderid} → {@code order_id},
+     * {@code userid} → {@code username}).</p>
      *
      * @param tableName the lowercase table name
      * @return unmodifiable ordered map of HSQLDB to PostgreSQL column names
@@ -467,7 +483,7 @@ public final class SchemaMapper {
         List<ColDef> cols = TABLE_COLUMNS.get(tableName);
         LinkedHashMap<String, String> mapping = new LinkedHashMap<>(cols.size());
         for (ColDef col : cols) {
-            mapping.put(col.name(), col.name());
+            mapping.put(col.hsqldbName(), col.pgName());
         }
         return Collections.unmodifiableMap(mapping);
     }
@@ -594,11 +610,14 @@ public final class SchemaMapper {
     // ==========================================
 
     /**
-     * Returns all column names for the given table in schema definition order.
-     * Names are in PostgreSQL snake_case (identical to the lowercase HSQLDB names).
+     * Returns all PostgreSQL column names for the given table in schema definition order.
+     *
+     * <p>For Account and Catalog tables, these are identical to the HSQLDB names.
+     * For Order tables, these are the snake_case names defined in the Order Service
+     * Liquibase schema.</p>
      *
      * @param tableName the lowercase table name
-     * @return unmodifiable list of column names in schema order
+     * @return unmodifiable list of PostgreSQL column names in schema order
      * @throws IllegalArgumentException if the table name is not recognized
      */
     public static List<String> getColumnNames(String tableName) {
@@ -606,7 +625,7 @@ public final class SchemaMapper {
         List<ColDef> cols = TABLE_COLUMNS.get(tableName);
         var names = new java.util.ArrayList<String>(cols.size());
         for (ColDef col : cols) {
-            names.add(col.name());
+            names.add(col.pgName());
         }
         return Collections.unmodifiableList(names);
     }
@@ -660,8 +679,13 @@ public final class SchemaMapper {
     /**
      * Finds the ColDef record for a specific column in a specific table.
      *
+     * <p>The lookup matches against both the HSQLDB source name and the PostgreSQL
+     * target name, so callers may pass either convention. For Account and Catalog
+     * service tables these are identical; for Order service tables the HSQLDB name
+     * (e.g. {@code "orderid"}) differs from the PostgreSQL name (e.g. {@code "order_id"}).
+     *
      * @param tableName  the lowercase table name
-     * @param columnName the lowercase column name
+     * @param columnName the lowercase column name (HSQLDB or PostgreSQL)
      * @return the matching ColDef record
      * @throws IllegalArgumentException if the table or column name is not recognized
      */
@@ -672,12 +696,14 @@ public final class SchemaMapper {
         }
         List<ColDef> cols = TABLE_COLUMNS.get(tableName);
         for (ColDef col : cols) {
-            if (col.name().equals(columnName)) {
+            if (col.hsqldbName().equals(columnName) || col.pgName().equals(columnName)) {
                 return col;
             }
         }
         throw new IllegalArgumentException("Unknown column '" + columnName
-                + "' in table '" + tableName + "'. Valid columns: "
-                + cols.stream().map(ColDef::name).toList());
+                + "' in table '" + tableName + "'. Valid columns (hsqldb→pg): "
+                + cols.stream()
+                       .map(c -> c.hsqldbName() + "→" + c.pgName())
+                       .toList());
     }
 }

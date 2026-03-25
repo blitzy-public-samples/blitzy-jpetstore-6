@@ -98,6 +98,12 @@ public class SecurityConfig {
                         // browse and build a cart before signing in").
                         .pathMatchers("/actions/Cart.action**").permitAll()
 
+                        // Cart REST API is public — externalized cart state mirrors the
+                        // monolith's session-scoped CartActionBean which allowed unauthenticated
+                        // access. Anonymous users build carts keyed by session cookie; on login,
+                        // the anonymous cart is merged into the user-keyed cart.
+                        .pathMatchers("/api/cart/**").permitAll()
+
                         // Static assets (CSS stylesheets and images) are always served from
                         // the monolith and require no authentication.
                         .pathMatchers("/css/**", "/images/**").permitAll()

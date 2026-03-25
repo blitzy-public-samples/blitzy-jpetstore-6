@@ -67,7 +67,7 @@ spring:
     # update, or validate schema on its own. Setting to 'none' ensures
     # Liquibase is the single source of truth for DDL.
     hibernate:
-      ddl-auto: none
+      ddl-auto: validate
 
     # Disable SQL logging in production to reduce log noise.
     # Enable temporarily for debugging by setting to true or via env var.

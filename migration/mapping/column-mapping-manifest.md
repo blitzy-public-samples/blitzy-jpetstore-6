@@ -74,19 +74,26 @@ The following data type conversions are applied **globally** across all 13 table
 
 ## 2. Column Naming Convention
 
-All column names are converted from HSQLDB's case-insensitive naming to PostgreSQL **`snake_case`** convention:
+Column naming follows a **per-service convention** aligned with each service's Liquibase schema:
+
+- **Account Service** and **Catalog Service**: Column names are preserved as **HSQLDB-identical lowercase** (e.g., `userid`, `firstname`, `catid`, `productid`). No snake_case splitting is applied. This minimizes migration complexity for these services where the HSQLDB names are already lowercase and unambiguous.
+- **Order Service**: Column names are converted to **`snake_case`** convention (e.g., `orderid` → `order_id`, `billtofirstname` → `bill_to_first_name`). This was applied because the Order Service tables have many long compound column names that benefit from snake_case readability.
+
+| Service | Naming Convention | Example |
+|---------|-------------------|---------|
+| Account Service | HSQLDB-identical lowercase | `userid` → `userid`, `firstname` → `firstname` |
+| Catalog Service | HSQLDB-identical lowercase | `catid` → `catid`, `productid` → `productid` |
+| Order Service | snake_case | `orderid` → `order_id`, `billtofirstname` → `bill_to_first_name` |
+
+**Order Service snake_case rules:**
 
 | Naming Pattern | HSQLDB Example | PostgreSQL Result | Rule Applied |
 |---------------|---------------|-------------------|-------------|
-| Compound word (no separator) | `userid` | `user_id` | Split at logical word boundary |
-| Compound word (no separator) | `firstname` | `first_name` | Split at logical word boundary |
+| Compound word (no separator) | `orderid` | `order_id` | Split at logical word boundary |
 | Compound word (no separator) | `billtofirstname` | `bill_to_first_name` | Split at each logical word boundary |
-| Abbreviation + word | `langpref` | `lang_pref` | Split abbreviation from word |
-| Abbreviation + word | `favcategory` | `fav_category` | Split abbreviation from word |
+| Special case | `userid` | `username` | Renamed to match application semantics (no FK to account) |
 | Short name (already lowercase) | `addr1` | `addr1` | Preserved as-is (already snake_case-compatible) |
-| Short name (already lowercase) | `qty` | `qty` | Preserved as-is |
-| Single word (already lowercase) | `email` | `email` | No change needed |
-| Single word (already lowercase) | `status` | `status` | No change needed |
+| Single word (already lowercase) | `courier` | `courier` | No change needed |
 
 ---
 
@@ -97,8 +104,8 @@ All column names are converted from HSQLDB's case-insensitive naming to PostgreS
 | **Primary Key (PK)** | Preserved exactly as defined in source schema | All tables within each service database |
 | **NOT NULL** | Preserved exactly as defined in source schema | All columns |
 | **UNIQUE** | Preserved if present in source schema | All tables |
-| **Intra-service Foreign Key** | **Preserved** as database-level constraint | FKs where both tables reside in the same database (e.g., `product.category → category.cat_id`) |
-| **Cross-service Foreign Key** | **Removed** as database constraint; enforced at application layer via REST API calls | FKs where tables reside in different databases (e.g., `lineitem.item_id → item.item_id`, `orders.user_id → account.user_id`) |
+| **Intra-service Foreign Key** | **Preserved** as database-level constraint | FKs where both tables reside in the same database (e.g., `product.category → category.catid`) |
+| **Cross-service Foreign Key** | **Removed** as database constraint; enforced at application layer via REST API calls | FKs where tables reside in different databases (e.g., `lineitem.item_id → item.itemid`, `orders.username → account.userid`) |
 
 ---
 
@@ -157,10 +164,10 @@ CREATE TABLE account (
 
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|
-| 1 | `userid` | `VARCHAR(80)` | `user_id` | `varchar(80)` | NOT NULL | PK (`pk_account`) | Yes |
+| 1 | `userid` | `VARCHAR(80)` | `userid` | `varchar(80)` | NOT NULL | PK (`pk_account`) | No |
 | 2 | `email` | `VARCHAR(80)` | `email` | `varchar(80)` | NOT NULL | — | No |
-| 3 | `firstname` | `VARCHAR(80)` | `first_name` | `varchar(80)` | NOT NULL | — | Yes |
-| 4 | `lastname` | `VARCHAR(80)` | `last_name` | `varchar(80)` | NOT NULL | — | Yes |
+| 3 | `firstname` | `VARCHAR(80)` | `firstname` | `varchar(80)` | NOT NULL | — | No |
+| 4 | `lastname` | `VARCHAR(80)` | `lastname` | `varchar(80)` | NOT NULL | — | No |
 | 5 | `status` | `VARCHAR(2)` | `status` | `varchar(2)` | NULL | — | No |
 | 6 | `addr1` | `VARCHAR(80)` | `addr1` | `varchar(80)` | NOT NULL | — | No |
 | 7 | `addr2` | `VARCHAR(40)` | `addr2` | `varchar(40)` | NULL | — | No |
@@ -171,10 +178,7 @@ CREATE TABLE account (
 | 12 | `phone` | `VARCHAR(80)` | `phone` | `varchar(80)` | NOT NULL | — | No |
 
 **Renaming Details:**
-- `userid` → `user_id` — compound word split at logical boundary
-- `firstname` → `first_name` — compound word split at logical boundary
-- `lastname` → `last_name` — compound word split at logical boundary
-- Short names (`addr1`, `addr2`, `city`, `state`, `zip`, `country`, `phone`) are already lowercase and snake_case-compatible — preserved as-is.
+- No columns renamed — Account Service uses HSQLDB-identical lowercase column names per the per-service naming convention (see [Section 2](#2-column-naming-convention)).
 
 ---
 
@@ -196,18 +200,14 @@ CREATE TABLE profile (
 
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|
-| 1 | `userid` | `VARCHAR(80)` | `user_id` | `varchar(80)` | NOT NULL | PK (`pk_profile`) | Yes |
-| 2 | `langpref` | `VARCHAR(80)` | `lang_pref` | `varchar(80)` | NOT NULL | — | Yes |
-| 3 | `favcategory` | `VARCHAR(30)` | `fav_category` | `varchar(30)` | NULL | — | Yes |
-| 4 | `mylistopt` | `INT` | `my_list_opt` | `integer` | NULL | — | Yes |
-| 5 | `banneropt` | `INT` | `banner_opt` | `integer` | NULL | — | Yes |
+| 1 | `userid` | `VARCHAR(80)` | `userid` | `varchar(80)` | NOT NULL | PK (`pk_profile`) | No |
+| 2 | `langpref` | `VARCHAR(80)` | `langpref` | `varchar(80)` | NOT NULL | — | No |
+| 3 | `favcategory` | `VARCHAR(30)` | `favcategory` | `varchar(30)` | NULL | — | No |
+| 4 | `mylistopt` | `INT` | `mylistopt` | `integer` | NULL | — | No |
+| 5 | `banneropt` | `INT` | `banneropt` | `integer` | NULL | — | No |
 
 **Renaming Details:**
-- `userid` → `user_id`
-- `langpref` → `lang_pref` — abbreviation + word split
-- `favcategory` → `fav_category` — abbreviation + word split
-- `mylistopt` → `my_list_opt` — three-word compound split
-- `banneropt` → `banner_opt` — compound word split
+- No columns renamed — Account Service uses HSQLDB-identical lowercase column names.
 
 **Data Type Changes:**
 - `INT` → `integer` (columns 4, 5)
@@ -229,12 +229,11 @@ CREATE TABLE bannerdata (
 
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|
-| 1 | `favcategory` | `VARCHAR(80)` | `fav_category` | `varchar(80)` | NOT NULL | PK (`pk_bannerdata`) | Yes |
-| 2 | `bannername` | `VARCHAR(255)` | `banner_name` | `varchar(255)` | NULL | — | Yes |
+| 1 | `favcategory` | `VARCHAR(80)` | `favcategory` | `varchar(80)` | NOT NULL | PK (`pk_bannerdata`) | No |
+| 2 | `bannername` | `VARCHAR(255)` | `bannername` | `varchar(255)` | NULL | — | No |
 
 **Renaming Details:**
-- `favcategory` → `fav_category` — abbreviation + word split
-- `bannername` → `banner_name` — compound word split
+- No columns renamed — Account Service uses HSQLDB-identical lowercase column names.
 
 ---
 
@@ -260,13 +259,12 @@ CREATE TABLE category (
 
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|
-| 1 | `catid` | `VARCHAR(10)` | `cat_id` | `varchar(10)` | NOT NULL | PK (`pk_category`) | Yes |
+| 1 | `catid` | `VARCHAR(10)` | `catid` | `varchar(10)` | NOT NULL | PK (`pk_category`) | No |
 | 2 | `name` | `VARCHAR(80)` | `name` | `varchar(80)` | NULL | — | No |
 | 3 | `descn` | `VARCHAR(255)` | `descn` | `varchar(255)` | NULL | — | No |
 
 **Renaming Details:**
-- `catid` → `cat_id` — abbreviation + identifier split
-- `name` and `descn` — already lowercase, preserved as-is
+- No columns renamed — Catalog Service uses HSQLDB-identical lowercase column names per the per-service naming convention (see [Section 2](#2-column-naming-convention)).
 
 ---
 
@@ -294,16 +292,16 @@ CREATE INDEX productName ON product (name);
 
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|
-| 1 | `productid` | `VARCHAR(10)` | `product_id` | `varchar(10)` | NOT NULL | PK (`pk_product`) | Yes |
-| 2 | `category` | `VARCHAR(10)` | `category` | `varchar(10)` | NOT NULL | FK → `category(cat_id)` (INTRA-SERVICE, preserved) | No |
+| 1 | `productid` | `VARCHAR(10)` | `productid` | `varchar(10)` | NOT NULL | PK (`pk_product`) | No |
+| 2 | `category` | `VARCHAR(10)` | `category` | `varchar(10)` | NOT NULL | FK → `category(catid)` (INTRA-SERVICE, preserved) | No |
 | 3 | `name` | `VARCHAR(80)` | `name` | `varchar(80)` | NULL | — | No |
 | 4 | `descn` | `VARCHAR(255)` | `descn` | `varchar(255)` | NULL | — | No |
 
 **Renaming Details:**
-- `productid` → `product_id` — compound word split
+- No columns renamed — Catalog Service uses HSQLDB-identical lowercase column names.
 
 **Foreign Key:**
-- `fk_product_1`: `category` → `category(cat_id)` — **INTRA-SERVICE** (both tables in `jpetstore_catalog`) → **preserved** as database constraint. Note that the FK target column is renamed from `catid` to `cat_id` in PostgreSQL.
+- `fk_product_1`: `category` → `category(catid)` — **INTRA-SERVICE** (both tables in `jpetstore_catalog`) → **preserved** as database constraint.
 
 **Indexes:**
 - `productCat` → `idx_product_category` on `product(category)`
@@ -342,11 +340,11 @@ CREATE INDEX itemProd ON item (productid);
 
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|
-| 1 | `itemid` | `VARCHAR(10)` | `item_id` | `varchar(10)` | NOT NULL | PK (`pk_item`) | Yes |
-| 2 | `productid` | `VARCHAR(10)` | `product_id` | `varchar(10)` | NOT NULL | FK → `product(product_id)` (INTRA-SERVICE, preserved) | Yes |
-| 3 | `listprice` | `DECIMAL(10,2)` | `list_price` | `numeric(10,2)` | NULL | — | Yes |
-| 4 | `unitcost` | `DECIMAL(10,2)` | `unit_cost` | `numeric(10,2)` | NULL | — | Yes |
-| 5 | `supplier` | `INT` | `supplier` | `integer` | NULL | FK → `supplier(supp_id)` (INTRA-SERVICE, preserved) | No |
+| 1 | `itemid` | `VARCHAR(10)` | `itemid` | `varchar(10)` | NOT NULL | PK (`pk_item`) | No |
+| 2 | `productid` | `VARCHAR(10)` | `productid` | `varchar(10)` | NOT NULL | FK → `product(productid)` (INTRA-SERVICE, preserved) | No |
+| 3 | `listprice` | `DECIMAL(10,2)` | `listprice` | `numeric(10,2)` | NULL | — | No |
+| 4 | `unitcost` | `DECIMAL(10,2)` | `unitcost` | `numeric(10,2)` | NULL | — | No |
+| 5 | `supplier` | `INT` | `supplier` | `integer` | NULL | FK → `supplier(suppid)` (INTRA-SERVICE, preserved) | No |
 | 6 | `status` | `VARCHAR(2)` | `status` | `varchar(2)` | NULL | — | No |
 | 7 | `attr1` | `VARCHAR(80)` | `attr1` | `varchar(80)` | NULL | — | No |
 | 8 | `attr2` | `VARCHAR(80)` | `attr2` | `varchar(80)` | NULL | — | No |
@@ -355,22 +353,18 @@ CREATE INDEX itemProd ON item (productid);
 | 11 | `attr5` | `VARCHAR(80)` | `attr5` | `varchar(80)` | NULL | — | No |
 
 **Renaming Details:**
-- `itemid` → `item_id` — compound word split
-- `productid` → `product_id` — compound word split
-- `listprice` → `list_price` — compound word split
-- `unitcost` → `unit_cost` — compound word split
-- `supplier`, `status`, `attr1`–`attr5` — already lowercase, preserved as-is
+- No columns renamed — Catalog Service uses HSQLDB-identical lowercase column names.
 
 **Data Type Changes:**
 - `DECIMAL(10,2)` → `numeric(10,2)` (columns 3, 4)
 - `INT` → `integer` (column 5)
 
 **Foreign Keys (both INTRA-SERVICE — preserved):**
-- `fk_item_1`: `product_id` → `product(product_id)` — both tables in `jpetstore_catalog`
-- `fk_item_2`: `supplier` → `supplier(supp_id)` — both tables in `jpetstore_catalog`
+- `fk_item_1`: `productid` → `product(productid)` — both tables in `jpetstore_catalog`
+- `fk_item_2`: `supplier` → `supplier(suppid)` — both tables in `jpetstore_catalog`
 
 **Index:**
-- `itemProd` → `idx_item_product_id` on `item(product_id)`
+- `itemProd` → `idx_item_productid` on `item(productid)`
 
 ---
 
@@ -389,13 +383,12 @@ CREATE TABLE inventory (
 
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed | Migration Note |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|---------------|
-| 1 | `itemid` | `VARCHAR(10)` | `item_id` | `varchar(10)` | NOT NULL | PK (`pk_inventory`) | Yes | Direct migration |
+| 1 | `itemid` | `VARCHAR(10)` | `itemid` | `varchar(10)` | NOT NULL | PK (`pk_inventory`) | No | Direct migration |
 | 2 | `qty` | `INT` | `qty` | `integer` | NOT NULL | — | No | Direct migration |
 | 3 | *(new)* | *(n/a)* | `version` | `integer` | NOT NULL (default 0) | — | N/A | **Added column** — JPA `@Version` for optimistic locking |
 
 **Renaming Details:**
-- `itemid` → `item_id` — compound word split
-- `qty` — already lowercase, preserved as-is
+- No columns renamed — Catalog Service uses HSQLDB-identical lowercase column names.
 
 **Data Type Changes:**
 - `INT` → `integer` (column 2)
@@ -427,7 +420,7 @@ CREATE TABLE supplier (
 
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|
-| 1 | `suppid` | `INT` | `supp_id` | `integer` | NOT NULL | PK (`pk_supplier`) | Yes |
+| 1 | `suppid` | `INT` | `suppid` | `integer` | NOT NULL | PK (`pk_supplier`) | No |
 | 2 | `name` | `VARCHAR(80)` | `name` | `varchar(80)` | NULL | — | No |
 | 3 | `status` | `VARCHAR(2)` | `status` | `varchar(2)` | NOT NULL | — | No |
 | 4 | `addr1` | `VARCHAR(80)` | `addr1` | `varchar(80)` | NULL | — | No |
@@ -438,8 +431,7 @@ CREATE TABLE supplier (
 | 9 | `phone` | `VARCHAR(80)` | `phone` | `varchar(80)` | NULL | — | No |
 
 **Renaming Details:**
-- `suppid` → `supp_id` — abbreviation + identifier split
-- All other columns — already lowercase, preserved as-is
+- No columns renamed — Catalog Service uses HSQLDB-identical lowercase column names.
 
 **Data Type Changes:**
 - `INT` → `integer` (column 1)
@@ -491,7 +483,7 @@ CREATE TABLE orders (
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|
 | 1 | `orderid` | `INT` | `order_id` | `integer` | NOT NULL | PK (`pk_orders`), generated by sequence `order_id_seq` | Yes |
-| 2 | `userid` | `VARCHAR(80)` | `user_id` | `varchar(80)` | NOT NULL | ⚠️ Cross-service ref → `account.user_id` — **NO FK** | Yes |
+| 2 | `userid` | `VARCHAR(80)` | `username` | `varchar(80)` | NOT NULL | ⚠️ Cross-service ref → `account.userid` — **NO FK** | Yes (renamed) |
 | 3 | `orderdate` | `DATE` | `order_date` | `timestamp with time zone` | NOT NULL | — | Yes |
 | 4 | `shipaddr1` | `VARCHAR(80)` | `ship_addr1` | `varchar(80)` | NOT NULL | — | Yes |
 | 5 | `shipaddr2` | `VARCHAR(80)` | `ship_addr2` | `varchar(80)` | NULL | — | Yes |
@@ -518,7 +510,7 @@ CREATE TABLE orders (
 
 **Renaming Details:**
 - `orderid` → `order_id`
-- `userid` → `user_id`
+- `userid` → `username` — renamed to match application semantics (stores username, no FK to account table)
 - `orderdate` → `order_date`
 - `shipaddr1` → `ship_addr1`, `shipaddr2` → `ship_addr2`
 - `shipcity` → `ship_city`, `shipstate` → `ship_state`, `shipzip` → `ship_zip`, `shipcountry` → `ship_country`
@@ -541,7 +533,7 @@ CREATE TABLE orders (
 - The `order_id` PK is generated by PostgreSQL native sequence `order_id_seq`, replacing the HSQLDB `sequence` table's row `('ordernum', ...)`. See [Section 9: Sequence Replacement](#9-sequence-replacement) for details.
 
 **Cross-Service Reference:**
-- `user_id` references `account.user_id` in the Account database — **NO foreign key constraint** in PostgreSQL. Referential integrity is enforced at the application layer by the Order Service calling `GET /api/accounts/{username}` on the Account Service before order creation.
+- `username` references `account.userid` in the Account database — **NO foreign key constraint** in PostgreSQL. Referential integrity is enforced at the application layer by the Order Service calling `GET /api/accounts/{username}` on the Account Service before order creation.
 
 ---
 
@@ -640,11 +632,10 @@ CREATE TABLE sequence (
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|
 | 1 | `name` | `VARCHAR(30)` | `name` | `varchar(30)` | NOT NULL | PK (`pk_sequence`) | No |
-| 2 | `nextid` | `INT` | `next_id` | `integer` | NOT NULL | — | Yes |
+| 2 | `nextid` | `INT` | `nextid` | `integer` | NOT NULL | — | No |
 
 **Renaming Details:**
-- `nextid` → `next_id`
-- `name` — preserved as-is
+- No columns renamed — `sequence` table is a deprecated reference table (see note below) and uses HSQLDB-identical names.
 
 **Data Type Changes:**
 - `INT` → `integer` (column 2)
@@ -664,7 +655,7 @@ The following two logical foreign key relationships span different bounded conte
 | Property | Value |
 |----------|-------|
 | **Source (HSQLDB)** | `lineitem.itemid` references `item.itemid` — no explicit FK constraint in DDL |
-| **Target (PostgreSQL)** | `lineitem.item_id` stored as plain `varchar(10)` field with **NO FK constraint** |
+| **Target (PostgreSQL)** | `lineitem.item_id` (Order DB, snake_case) references `item.itemid` (Catalog DB, HSQLDB-identical) — stored as plain `varchar(10)` field with **NO FK constraint** |
 | **Source Database** | `jpetstore_order` (Order Service) |
 | **Target Database** | `jpetstore_catalog` (Catalog Service) |
 | **Application-Layer Enforcement** | Order Service validates item existence via synchronous REST call: `GET /api/items/{id}` on Catalog Service before inserting line items |
@@ -675,7 +666,7 @@ The following two logical foreign key relationships span different bounded conte
 | Property | Value |
 |----------|-------|
 | **Source (HSQLDB)** | `orders.userid` references `account.userid` — no explicit FK constraint in DDL |
-| **Target (PostgreSQL)** | `orders.user_id` stored as plain `varchar(80)` field with **NO FK constraint** |
+| **Target (PostgreSQL)** | `orders.username` (Order DB, renamed) references `account.userid` (Account DB, HSQLDB-identical) — stored as plain `varchar(80)` field with **NO FK constraint** |
 | **Source Database** | `jpetstore_order` (Order Service) |
 | **Target Database** | `jpetstore_account` (Account Service) |
 | **Application-Layer Enforcement** | Order Service validates user existence via synchronous REST call: `GET /api/accounts/{username}` on Account Service before creating an order |
@@ -691,12 +682,12 @@ The HSQLDB schema defines 3 indexes. All are on tables in the Catalog database a
 |---|-------------------|-------|-------------------|----------------------|---------------------|----------|
 | 1 | `productCat` | `product` | `category` | `idx_product_category` | `category` | `jpetstore_catalog` |
 | 2 | `productName` | `product` | `name` | `idx_product_name` | `name` | `jpetstore_catalog` |
-| 3 | `itemProd` | `item` | `productid` | `idx_item_product_id` | `product_id` | `jpetstore_catalog` |
+| 3 | `itemProd` | `item` | `productid` | `idx_item_productid` | `productid` | `jpetstore_catalog` |
 
 **Notes:**
 - Index names are converted to `idx_<table>_<column>` convention for consistency.
 - All indexes are non-unique, single-column B-tree indexes — same as the HSQLDB originals.
-- The column names within index definitions reference the renamed PostgreSQL column names (e.g., `productid` → `product_id`).
+- Catalog Service uses HSQLDB-identical column names, so index column references are unchanged (e.g., `productid` remains `productid`).
 
 ---
 
@@ -725,7 +716,7 @@ The `sequence` table's functionality is **replaced** by PostgreSQL native sequen
 
 2. **No Other Sequences Required**:
    - Account Service: Uses `username` (VARCHAR) as primary key — no integer sequence needed.
-   - Catalog Service: Uses string-based IDs (`catid`, `productid`, `itemid` are all VARCHAR) — no integer sequence needed.
+   - Catalog Service: Uses string-based IDs (`catid`, `productid`, `itemid` are all VARCHAR, preserved as HSQLDB-identical names) — no integer sequence needed.
 
 3. **Thread Safety**: The PostgreSQL `NEXTVAL('order_id_seq')` function is fully atomic and thread-safe, eliminating the race condition present in the HSQLDB `getNextId()` read-then-update pattern.
 
@@ -759,8 +750,9 @@ The `sequence` table's functionality is **replaced** by PostgreSQL native sequen
 
 | Category | Count | Examples |
 |----------|-------|---------|
-| Columns renamed to snake_case | 37 | `userid` → `user_id`, `billtofirstname` → `bill_to_first_name` |
-| Columns preserved unchanged | 49 | `email`, `status`, `qty`, `locale`, `courier` |
+| Order Service columns renamed to snake_case | 22 | `orderid` → `order_id`, `billtofirstname` → `bill_to_first_name` |
+| Order Service columns renamed (semantic) | 1 | `userid` → `username` |
+| Account/Catalog columns preserved (HSQLDB-identical) | 63 | `userid`, `firstname`, `catid`, `productid`, `email`, `status` |
 | Columns added (not in HSQLDB) | 1 | `inventory.version` for optimistic locking |
 
 ### Constraint Summary
@@ -768,7 +760,7 @@ The `sequence` table's functionality is **replaced** by PostgreSQL native sequen
 | Constraint Type | Count | Details |
 |----------------|-------|---------|
 | Primary Keys preserved | 13 | One per table (2 composite PKs: `orderstatus`, `lineitem`) |
-| Intra-service FKs preserved | 3 | `product.category → category.cat_id`, `item.product_id → product.product_id`, `item.supplier → supplier.supp_id` |
-| Cross-service FKs removed | 2 | `orders.user_id → account.user_id`, `lineitem.item_id → item.item_id` |
-| Indexes preserved | 3 | `idx_product_category`, `idx_product_name`, `idx_item_product_id` |
+| Intra-service FKs preserved | 3 | `product.category → category.catid`, `item.productid → product.productid`, `item.supplier → supplier.suppid` |
+| Cross-service FKs removed | 2 | `orders.username → account.userid`, `lineitem.item_id → item.itemid` |
+| Indexes preserved | 3 | `idx_product_category`, `idx_product_name`, `idx_item_productid` |
 | Sequences added | 1 | `order_id_seq` (replaces `sequence` table) |

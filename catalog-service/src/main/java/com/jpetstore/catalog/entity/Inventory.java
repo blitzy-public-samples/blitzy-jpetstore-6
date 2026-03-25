@@ -116,7 +116,7 @@ public class Inventory implements Serializable {
      */
     @Version
     @Column(name = "version")
-    private Long version;
+    private Integer version;
 
     /**
      * Default no-argument constructor required by JPA.
@@ -174,7 +174,7 @@ public class Inventory implements Serializable {
      *
      * @return the current version, or {@code null} for a new (transient) entity
      */
-    public Long getVersion() {
+    public Integer getVersion() {
         return version;
     }
 
@@ -187,7 +187,7 @@ public class Inventory implements Serializable {
      *
      * @param version the version to set
      */
-    public void setVersion(Long version) {
+    public void setVersion(Integer version) {
         this.version = version;
     }
 

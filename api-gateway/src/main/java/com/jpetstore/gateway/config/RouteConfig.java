@@ -200,6 +200,13 @@ public class RouteConfig {
                         .path("/api/orders/**")
                         .uri(orderServiceUrl))
 
+                // Cart REST API (served by Order Service)
+                // Endpoints: GET /api/cart/{sessionId}, POST /api/cart/{sessionId}/items,
+                //            PUT /api/cart/{sessionId}, DELETE /api/cart/{sessionId}/items/{itemId}
+                .route("cart-api", r -> r
+                        .path("/api/cart/**")
+                        .uri(orderServiceUrl))
+
                 // =================================================================
                 // 3. STATIC ASSET ROUTES
                 // =================================================================
