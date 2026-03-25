@@ -146,7 +146,7 @@ public class InventoryService {
         if (existingReservation.isPresent()) {
             log.info("Idempotency guard: reservation already exists for order {} item {} (reservationId={}). "
                     + "Returning success without re-decrementing.",
-                    orderId, itemId, existingReservation.get().getId());
+                    orderId, itemId, existingReservation.orElseThrow().getId());
             return true;
         }
 
@@ -196,7 +196,7 @@ public class InventoryService {
 
         Optional<Inventory> inventoryOpt = inventoryRepository.findById(itemId);
         if (inventoryOpt.isPresent()) {
-            Inventory inventory = inventoryOpt.get();
+            Inventory inventory = inventoryOpt.orElseThrow();
             int previousQty = inventory.getQty();
             inventory.setQty(previousQty + quantity);
             inventoryRepository.save(inventory);

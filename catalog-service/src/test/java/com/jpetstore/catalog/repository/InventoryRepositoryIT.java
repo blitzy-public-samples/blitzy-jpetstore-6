@@ -175,7 +175,7 @@ class InventoryRepositoryIT {
 
         // then
         assertThat(result).isPresent();
-        Inventory inventory = result.get();
+        Inventory inventory = result.orElseThrow();
         assertThat(inventory.getItemId()).isEqualTo("EST-1");
         assertThat(inventory.getQty()).isEqualTo(10000);
     }
@@ -211,7 +211,7 @@ class InventoryRepositoryIT {
         // Verify the inventory quantity was decremented from 10000 to 9990
         Optional<Inventory> result = inventoryRepository.findById("EST-1");
         assertThat(result).isPresent();
-        assertThat(result.get().getQty()).isEqualTo(9990);
+        assertThat(result.orElseThrow().getQty()).isEqualTo(9990);
     }
 
     /**
@@ -254,7 +254,7 @@ class InventoryRepositoryIT {
         // Verify inventory quantity remains unchanged at 5
         Optional<Inventory> result = inventoryRepository.findById("EST-LOW");
         assertThat(result).isPresent();
-        assertThat(result.get().getQty()).isEqualTo(5);
+        assertThat(result.orElseThrow().getQty()).isEqualTo(5);
     }
 
     /**
@@ -293,7 +293,7 @@ class InventoryRepositoryIT {
         // Verify inventory quantity is now exactly 0
         Optional<Inventory> result = inventoryRepository.findById("EST-EXACT");
         assertThat(result).isPresent();
-        assertThat(result.get().getQty()).isEqualTo(0);
+        assertThat(result.orElseThrow().getQty()).isEqualTo(0);
     }
 
     /**

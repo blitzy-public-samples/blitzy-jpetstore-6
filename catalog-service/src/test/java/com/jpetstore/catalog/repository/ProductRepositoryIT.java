@@ -336,7 +336,7 @@ class ProductRepositoryIT {
         // then — matches monolith lines 81-84
         assertThat(result).isPresent();
 
-        Product product = result.get();
+        Product product = result.orElseThrow();
         assertThat(product.getProductId()).isEqualTo("FI-FW-01");
         assertThat(product.getName()).isEqualTo("Koi");
         assertThat(product.getCategory().getCatId()).isEqualTo("FISH");
