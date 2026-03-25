@@ -16,10 +16,14 @@
 package com.jpetstore.catalog.controller;
 
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
+
+import jakarta.validation.Valid;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -33,35 +37,54 @@ import com.jpetstore.catalog.dto.InventoryDecrementRequest;
 import com.jpetstore.catalog.dto.ItemDTO;
 import com.jpetstore.catalog.dto.ProductDTO;
 import com.jpetstore.catalog.entity.Item;
+import com.jpetstore.catalog.entity.Product;
 import com.jpetstore.catalog.service.CatalogService;
 import com.jpetstore.catalog.service.InventoryService;
-
-import jakarta.validation.Valid;
 
 /**
  * REST controller for the Item resource in the Catalog bounded context.
  *
- * <p>Exposes item browsing and inventory management endpoints that replicate
- * the monolith's {@code CatalogActionBean} item operations and the
- * cross-service inventory operations used by the Order Service's Saga
- * orchestrator.</p>
+ * <p>This is the most complex controller in the Catalog Service, exposing both
+ * item browsing endpoints and the critical inventory management endpoints used
+ * by the Order Service's Saga orchestrator during distributed order transactions.</p>
  *
- * <h3>Endpoints</h3>
+ * <h3>Monolith Replacement Mapping</h3>
  * <ul>
- *   <li>{@code GET /api/items?productId=} — List items by product</li>
- *   <li>{@code GET /api/items/{id}} — Get a single item by ID</li>
- *   <li>{@code GET /api/items/{id}/inventory} — Get inventory quantity for an item</li>
- *   <li>{@code POST /api/items/{id}/inventory/decrement} — Decrement inventory (Saga step)</li>
- *   <li>{@code POST /api/items/{id}/inventory/restore} — Restore inventory (Saga compensation)</li>
+ *   <li>{@code CatalogActionBean.viewProduct()} item listing →
+ *       {@link #getItemsByProduct(String)}</li>
+ *   <li>{@code CatalogActionBean.viewItem()} item detail →
+ *       {@link #getItemById(String)}</li>
+ *   <li>{@code CatalogService.isItemInStock()} + {@code ItemMapper.getInventoryQuantity()} →
+ *       {@link #getInventory(String)}</li>
+ *   <li>{@code OrderService.insertOrder()} cross-boundary inventory decrement →
+ *       {@link #decrementInventory(String, InventoryDecrementRequest)}</li>
  * </ul>
  *
- * <p>The inventory decrement and restore endpoints are consumed by the Order Service's
- * {@code OrderSagaOrchestrator} during the distributed order transaction. The decrement
- * endpoint uses an idempotency key ({@code orderId}) to prevent double-decrements on
- * retries, and the restore endpoint acts as the compensating transaction for failed orders.</p>
+ * <h3>Cross-Service Contracts</h3>
+ * <ul>
+ *   <li><strong>GET endpoints</strong>: Called by API Gateway, monolith CatalogActionBean,
+ *       monolith CartActionBean, and Order Service's CatalogServiceClient</li>
+ *   <li><strong>POST inventory decrement</strong>: Called by Order Service's Saga
+ *       Orchestrator (Step 2: RESERVE_INVENTORY) — returns 200 on success,
+ *       409 Conflict on insufficient stock (per AAP Section 0.7.1)</li>
+ *   <li><strong>POST inventory restore</strong>: Called by Order Service's
+ *       InventoryCompensation for Saga rollback</li>
+ * </ul>
  *
- * @see com.jpetstore.catalog.service.CatalogService
- * @see com.jpetstore.catalog.service.InventoryService
+ * <h3>Design Decisions</h3>
+ * <ul>
+ *   <li>Returns {@link ResponseEntity} wrappers for proper HTTP status codes</li>
+ *   <li>Returns DTOs, NOT JPA entities (clean API boundary)</li>
+ *   <li>No {@code @Transactional} on controller methods — transactions managed
+ *       by the service layer</li>
+ *   <li>No cross-service database access — inventory managed through
+ *       {@link InventoryService}</li>
+ *   <li>No session state — fully stateless REST controller</li>
+ *   <li>{@code @Valid} on POST request bodies triggers Jakarta Bean Validation</li>
+ * </ul>
+ *
+ * @see CatalogService
+ * @see InventoryService
  */
 @RestController
 @RequestMapping("/api/items")
@@ -73,33 +96,50 @@ public class ItemController {
     private final InventoryService inventoryService;
 
     /**
-     * Constructs the ItemController with the required services.
+     * Constructs the ItemController with the required service dependencies.
+     *
+     * <p>Uses constructor injection (no {@code @Autowired} annotation needed
+     * with a single constructor) consistent with Spring's recommended pattern
+     * and the monolith's service class conventions.</p>
      *
      * @param catalogService   the business logic service for catalog read operations
-     * @param inventoryService the service managing inventory quantity operations
+     *                         (item listing, item detail lookup)
+     * @param inventoryService the service managing atomic inventory quantity operations
+     *                         (stock check, decrement, restore)
      */
     public ItemController(CatalogService catalogService, InventoryService inventoryService) {
         this.catalogService = catalogService;
         this.inventoryService = inventoryService;
     }
 
+    // =========================================================================
+    // Endpoint 1: GET /api/items?productId={productId}
+    // =========================================================================
+
     /**
      * Retrieves all items belonging to a specified product.
      *
-     * <p>Replaces the monolith's {@code CatalogActionBean.viewProduct()} which calls
-     * {@code catalogService.getItemListByProduct(productId)} and populates the item
-     * list displayed in Product.jsp.</p>
+     * <p><strong>Monolith equivalence:</strong> Replaces
+     * {@code CatalogActionBean.viewProduct()} (line 168) which calls
+     * {@code catalogService.getItemListByProduct(productId)}, and the
+     * monolith's {@code CatalogService.getItemListByProduct()} (lines 79-81)
+     * which passes through to {@code itemMapper.getItemListByProduct(productId)}.</p>
      *
-     * <p>Each item in the response includes the current inventory quantity, loaded
-     * from the separate Inventory entity to populate the {@code quantity} field
-     * in {@link ItemDTO}.</p>
+     * <p>Each item in the response includes:</p>
+     * <ul>
+     *   <li>All item fields (ID, price, cost, status, attributes 1-5)</li>
+     *   <li>Nested {@link ProductDTO} with product details</li>
+     *   <li>Current inventory quantity loaded from the separate Inventory entity</li>
+     * </ul>
      *
-     * @param productId the product identifier to filter items by (e.g., "FI-SW-01")
+     * @param productId the product identifier to filter items by (e.g., "FI-SW-01");
+     *                  required query parameter
      * @return HTTP 200 with a JSON array of {@link ItemDTO} objects;
      *         empty array if no items match the product
      */
-    @GetMapping(params = "productId")
-    public ResponseEntity<List<ItemDTO>> getItemsByProduct(@RequestParam String productId) {
+    @GetMapping
+    public ResponseEntity<List<ItemDTO>> getItemsByProduct(
+            @RequestParam("productId") String productId) {
         log.debug("GET /api/items?productId={} — fetching items by product", productId);
         List<Item> items = catalogService.getItemListByProduct(productId);
         List<ItemDTO> dtos = items.stream()
@@ -109,139 +149,241 @@ public class ItemController {
         return ResponseEntity.ok(dtos);
     }
 
+    // =========================================================================
+    // Endpoint 2: GET /api/items/{id}
+    // =========================================================================
+
     /**
-     * Retrieves a single item by its unique identifier.
+     * Retrieves a single item by its unique identifier, including product info
+     * and current inventory quantity.
      *
-     * <p>Replaces the monolith's {@code CatalogActionBean.viewItem()} which calls
-     * {@code catalogService.getItem(itemId)} and renders Item.jsp.
-     * The response includes the current inventory quantity and the associated
-     * product details.</p>
+     * <p><strong>Monolith equivalence:</strong> Replaces
+     * {@code CatalogActionBean.viewItem()} (lines 179-182) which calls
+     * {@code catalogService.getItem(itemId)} then accesses
+     * {@code item.getProduct()}. In the monolith, {@code getItem()} performed
+     * a SQL JOIN to fetch item + product + inventory quantity together.</p>
      *
-     * @param id the item identifier (e.g., "EST-1", "EST-14")
+     * <p>In the decomposed architecture, the Item entity does NOT have a
+     * quantity field. The {@link #toDTO(Item)} helper separately fetches
+     * quantity from {@link InventoryService}.</p>
+     *
+     * <p>This endpoint is also called by Order Service's
+     * {@code CatalogServiceClient} via {@code GET /api/items/{id}}
+     * (per AAP Section 0.5.2).</p>
+     *
+     * @param itemId the item identifier (e.g., "EST-1", "EST-14")
      * @return HTTP 200 with the {@link ItemDTO} if found;
      *         HTTP 404 if no item exists with the given ID
      */
     @GetMapping("/{id}")
-    public ResponseEntity<ItemDTO> getItemById(@PathVariable String id) {
-        log.debug("GET /api/items/{} — fetching item", id);
-        Item item = catalogService.getItem(id);
-        if (item != null) {
-            log.debug("Item found: {}", id);
-            return ResponseEntity.ok(toDTO(item));
-        } else {
-            log.debug("Item not found: {}", id);
+    public ResponseEntity<ItemDTO> getItemById(@PathVariable("id") String itemId) {
+        log.debug("GET /api/items/{} — fetching item", itemId);
+        Item item = catalogService.getItem(itemId);
+        if (item == null) {
+            log.debug("Item not found: {}", itemId);
             return ResponseEntity.notFound().build();
+        }
+        log.debug("Item found: {}", itemId);
+        return ResponseEntity.ok(toDTO(item));
+    }
+
+    // =========================================================================
+    // Endpoint 3: GET /api/items/{id}/inventory
+    // =========================================================================
+
+    /**
+     * Retrieves the current inventory stock level for a specific item.
+     *
+     * <p><strong>Monolith equivalence:</strong> Replaces
+     * {@code CatalogService.isItemInStock()} (lines 87-89) which called
+     * {@code itemMapper.getInventoryQuantity(itemId) > 0}. This REST endpoint
+     * exposes the actual quantity AND the boolean {@code inStock} flag for
+     * more flexibility.</p>
+     *
+     * <p>Response format:</p>
+     * <pre>
+     * {
+     *   "itemId": "EST-1",
+     *   "quantity": 10000,
+     *   "inStock": true
+     * }
+     * </pre>
+     *
+     * <p>Always returns HTTP 200 — a quantity of 0 means out of stock,
+     * not "not found". This matches the monolith's behavior where missing
+     * inventory records effectively mean zero stock.</p>
+     *
+     * @param itemId the item identifier to check inventory for
+     * @return HTTP 200 with a JSON object containing {@code itemId},
+     *         {@code quantity} (int), and {@code inStock} (boolean)
+     */
+    @GetMapping("/{id}/inventory")
+    public ResponseEntity<Map<String, Object>> getInventory(@PathVariable("id") String itemId) {
+        log.debug("GET /api/items/{}/inventory — fetching inventory quantity", itemId);
+        int quantity = inventoryService.getInventoryQuantity(itemId);
+        log.debug("Inventory quantity for item '{}': {} (inStock={})", itemId, quantity, quantity > 0);
+        return ResponseEntity.ok(Map.of(
+                "itemId", itemId,
+                "quantity", quantity,
+                "inStock", quantity > 0
+        ));
+    }
+
+    // =========================================================================
+    // Endpoint 4: POST /api/items/{id}/inventory/decrement (Saga Step)
+    // =========================================================================
+
+    /**
+     * Atomically decrements the inventory quantity for a specific item as part
+     * of the order placement Saga.
+     *
+     * <p><strong>Monolith equivalence:</strong> Replaces the cross-boundary
+     * inventory decrement in {@code OrderService.insertOrder()} (lines 62-68)
+     * which called {@code itemMapper.updateInventoryQuantity()} in a loop for
+     * each line item, with the SQL: {@code UPDATE INVENTORY SET QTY = QTY -
+     * #{increment} WHERE ITEMID = #{itemId}}.</p>
+     *
+     * <p><strong>Saga Integration (AAP Section 0.7.1):</strong></p>
+     * <ul>
+     *   <li>This is the <strong>critical</strong> cross-service endpoint called by
+     *       Order Service's Saga Orchestrator during Step 2 (RESERVE_INVENTORY)</li>
+     *   <li>The {@code orderId} in the request body serves as the <strong>idempotency
+     *       key</strong> — duplicate requests with the same orderId and itemId return
+     *       success without double-decrementing</li>
+     *   <li>On success (200): Saga proceeds to confirm the order</li>
+     *   <li>On insufficient stock (409): Saga marks the order as FAILED — no
+     *       compensation needed since inventory was NOT decremented</li>
+     * </ul>
+     *
+     * <p><strong>Validation:</strong> The {@code @Valid} annotation triggers Jakarta
+     * Bean Validation on the request body:
+     * <ul>
+     *   <li>{@code quantity}: {@code @NotNull @Min(1)} — must be at least 1</li>
+     *   <li>{@code orderId}: {@code @NotBlank} — Saga idempotency key, must not
+     *       be empty</li>
+     * </ul>
+     * If validation fails, Spring Boot automatically returns 400 Bad Request.</p>
+     *
+     * @param itemId  the item identifier whose inventory to decrement
+     * @param request the decrement request containing {@code quantity} and
+     *                {@code orderId} (idempotency key)
+     * @return HTTP 200 with confirmation details if the decrement succeeded
+     *         (or was already applied for this orderId);
+     *         HTTP 409 Conflict with error details if insufficient stock
+     */
+    @PostMapping("/{id}/inventory/decrement")
+    public ResponseEntity<Map<String, Object>> decrementInventory(
+            @PathVariable("id") String itemId,
+            @Valid @RequestBody InventoryDecrementRequest request) {
+        log.info("POST /api/items/{}/inventory/decrement — quantity={}, orderId={}",
+                itemId, request.getQuantity(), request.getOrderId());
+
+        boolean success = inventoryService.decrementInventory(
+                itemId, request.getQuantity(), request.getOrderId());
+
+        if (success) {
+            log.info("Inventory decrement SUCCESS for item '{}', quantity={}, orderId={}",
+                    itemId, request.getQuantity(), request.getOrderId());
+            return ResponseEntity.ok(Map.of(
+                    "itemId", itemId,
+                    "decremented", request.getQuantity(),
+                    "orderId", request.getOrderId(),
+                    "status", "SUCCESS"
+            ));
+        } else {
+            log.warn("Inventory decrement FAILED for item '{}': insufficient stock or item not found. "
+                    + "requestedDecrement={}, orderId={}",
+                    itemId, request.getQuantity(), request.getOrderId());
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                    "itemId", itemId,
+                    "requestedDecrement", request.getQuantity(),
+                    "orderId", request.getOrderId(),
+                    "status", "INSUFFICIENT_STOCK"
+            ));
         }
     }
 
-    /**
-     * Retrieves the current inventory quantity for a specific item.
-     *
-     * <p>Replaces the monolith's {@code itemMapper.getInventoryQuantity(itemId)}
-     * call. Returns the raw integer quantity value for the Order Service or
-     * other consumers that need to check stock levels.</p>
-     *
-     * @param id the item identifier to check inventory for
-     * @return HTTP 200 with the integer quantity value (0 if item not found in inventory)
-     */
-    @GetMapping("/{id}/inventory")
-    public ResponseEntity<Integer> getInventoryQuantity(@PathVariable String id) {
-        log.debug("GET /api/items/{}/inventory — fetching inventory quantity", id);
-        int quantity = inventoryService.getInventoryQuantity(id);
-        log.debug("Inventory quantity for item '{}': {}", id, quantity);
-        return ResponseEntity.ok(quantity);
-    }
-
-    /**
-     * Decrements the inventory quantity for a specific item as part of the
-     * order placement Saga.
-     *
-     * <p>This endpoint is consumed by the Order Service's {@code OrderSagaOrchestrator}
-     * during Step 2 (RESERVE_INVENTORY) of the distributed order transaction.
-     * It uses optimistic locking ({@code @Version}) and an idempotency key
-     * ({@code orderId}) to safely handle concurrent requests and retries.</p>
-     *
-     * <p><strong>Idempotency:</strong> If a decrement request with the same
-     * {@code orderId} and {@code itemId} has already been processed, the endpoint
-     * returns {@code true} without double-decrementing. This is enforced by a
-     * unique constraint on the {@code inventory_reservation} table.</p>
-     *
-     * <p><strong>Oversell protection:</strong> The underlying SQL uses a
-     * {@code WHERE qty >= :decrement} guard to prevent negative inventory.
-     * If insufficient stock, returns {@code false} and no decrement occurs.</p>
-     *
-     * @param id      the item identifier to decrement inventory for
-     * @param request the decrement request containing quantity and orderId (idempotency key)
-     * @return HTTP 200 with {@code true} if the decrement succeeded (or was already applied);
-     *         HTTP 200 with {@code false} if insufficient inventory
-     */
-    @PostMapping("/{id}/inventory/decrement")
-    public ResponseEntity<Boolean> decrementInventory(
-            @PathVariable String id,
-            @Valid @RequestBody InventoryDecrementRequest request) {
-        log.info("POST /api/items/{}/inventory/decrement — quantity={}, orderId={}",
-                id, request.getQuantity(), request.getOrderId());
-        boolean success = inventoryService.decrementInventory(
-                id, request.getQuantity(), request.getOrderId());
-        log.info("Inventory decrement for item '{}': {}", id, success ? "SUCCESS" : "INSUFFICIENT_STOCK");
-        return ResponseEntity.ok(success);
-    }
+    // =========================================================================
+    // Endpoint 5: POST /api/items/{id}/inventory/restore (Saga Compensation)
+    // =========================================================================
 
     /**
      * Restores the inventory quantity for a specific item as part of the
      * Saga compensation (rollback) for a failed order.
      *
-     * <p>This endpoint is consumed by the Order Service's {@code InventoryCompensation}
-     * when an order fails after inventory was already decremented. It reverses the
-     * decrement by adding the quantity back and removing the reservation record.</p>
+     * <p>This endpoint is consumed by the Order Service's
+     * {@code InventoryCompensation} when an order fails after inventory was
+     * already decremented. It reverses the decrement by adding the quantity
+     * back and removing the reservation record.</p>
      *
-     * <p><strong>Idempotency:</strong> If no reservation record exists for the
-     * given {@code orderId} and {@code itemId}, the restore is a no-op (the
-     * decrement was never applied or was already compensated).</p>
+     * <p>Per AAP Section 0.7.1: the compensating transaction calls
+     * {@code POST /api/items/{id}/inventory/restore} for each decremented item.</p>
      *
-     * @param id      the item identifier to restore inventory for
-     * @param request the restore request containing quantity and orderId (matches the original decrement)
-     * @return HTTP 200 (no body) on successful restoration or no-op
+     * @param itemId  the item identifier to restore inventory for
+     * @param request the restore request containing {@code quantity} and
+     *                {@code orderId} (matches the original decrement)
+     * @return HTTP 200 on successful restoration
      */
     @PostMapping("/{id}/inventory/restore")
     public ResponseEntity<Void> restoreInventory(
-            @PathVariable String id,
+            @PathVariable("id") String itemId,
             @Valid @RequestBody InventoryDecrementRequest request) {
         log.info("POST /api/items/{}/inventory/restore — quantity={}, orderId={}",
-                id, request.getQuantity(), request.getOrderId());
-        inventoryService.restoreInventory(id, request.getQuantity(), request.getOrderId());
-        log.info("Inventory restored for item '{}', orderId='{}'", id, request.getOrderId());
+                itemId, request.getQuantity(), request.getOrderId());
+        inventoryService.restoreInventory(itemId, request.getQuantity(), request.getOrderId());
+        log.info("Inventory restored for item '{}', orderId='{}'", itemId, request.getOrderId());
         return ResponseEntity.ok().build();
     }
 
+    // =========================================================================
+    // Private Helper Methods — Entity-to-DTO Mapping
+    // =========================================================================
+
     /**
-     * Converts an Item entity to an ItemDTO for API responses.
+     * Converts an {@link Item} JPA entity to an {@link ItemDTO} for API responses.
      *
-     * <p>Maps entity field names to DTO field names. The product details are
-     * included as a nested {@link ProductDTO}. The inventory quantity is loaded
-     * separately from the Inventory entity via the CatalogService.</p>
+     * <p><strong>CRITICAL COMPLEXITY:</strong> The Item entity has
+     * {@code @ManyToOne Product} and {@code @ManyToOne Supplier} relationships
+     * that must be flattened. Additionally, the {@code quantity} field is NOT on
+     * the Item entity — it must be fetched separately from
+     * {@link InventoryService}.</p>
      *
-     * <p><strong>Entity-to-DTO field mapping:</strong></p>
+     * <p>Entity-to-DTO field mapping:</p>
      * <ul>
      *   <li>{@code Item.itemId} → {@code ItemDTO.itemId}</li>
-     *   <li>{@code Item.product.productId} → {@code ItemDTO.productId}</li>
+     *   <li>{@code Item.product.productId} → {@code ItemDTO.productId}
+     *       (flattened, null-safe)</li>
      *   <li>{@code Item.listPrice} → {@code ItemDTO.listPrice}</li>
      *   <li>{@code Item.unitCost} → {@code ItemDTO.unitCost}</li>
-     *   <li>{@code Item.supplier.suppid} → {@code ItemDTO.supplierId}</li>
+     *   <li>{@code Item.supplier.suppId} → {@code ItemDTO.supplierId}
+     *       (flattened from Integer to int, defaults to 0 if null)</li>
      *   <li>{@code Item.status} → {@code ItemDTO.status}</li>
      *   <li>{@code Item.attribute1-5} → {@code ItemDTO.attribute1-5}</li>
-     *   <li>{@code Inventory.qty} (separate entity) → {@code ItemDTO.quantity}</li>
-     *   <li>{@code Item.product} → {@code ItemDTO.product} (as nested ProductDTO)</li>
+     *   <li>{@code Item.product} → {@code ItemDTO.product} (nested ProductDTO)</li>
+     *   <li>{@code Inventory.qty} (separate entity) → {@code ItemDTO.quantity}
+     *       (fetched from InventoryService, returns 0 if not found)</li>
      * </ul>
      *
-     * @param item the entity to convert (must not be null)
-     * @return the populated ItemDTO with inventory quantity and nested product
+     * @param item the entity to convert; must not be {@code null}
+     * @return the fully populated {@link ItemDTO} with inventory quantity and
+     *         nested product information
      */
     private ItemDTO toDTO(Item item) {
         ItemDTO dto = new ItemDTO();
         dto.setItemId(item.getItemId());
+
+        // Flatten Product @ManyToOne → productId String (null-safe)
+        dto.setProductId(item.getProduct() != null
+                ? item.getProduct().getProductId() : null);
+
         dto.setListPrice(item.getListPrice());
         dto.setUnitCost(item.getUnitCost());
+
+        // Flatten Supplier @ManyToOne → supplierId int (null-safe, default 0)
+        dto.setSupplierId(item.getSupplier() != null
+                && item.getSupplier().getSuppId() != null
+                ? item.getSupplier().getSuppId() : 0);
+
         dto.setStatus(item.getStatus());
         dto.setAttribute1(item.getAttribute1());
         dto.setAttribute2(item.getAttribute2());
@@ -249,28 +391,43 @@ public class ItemController {
         dto.setAttribute4(item.getAttribute4());
         dto.setAttribute5(item.getAttribute5());
 
-        // Map product association
+        // Nested ProductDTO (includes Category → categoryId flattening)
         if (item.getProduct() != null) {
-            dto.setProductId(item.getProduct().getProductId());
-            ProductDTO productDTO = new ProductDTO();
-            productDTO.setProductId(item.getProduct().getProductId());
-            productDTO.setName(item.getProduct().getName());
-            productDTO.setDescription(item.getProduct().getDescription());
-            if (item.getProduct().getCategory() != null) {
-                productDTO.setCategoryId(item.getProduct().getCategory().getCatId());
-            }
-            dto.setProduct(productDTO);
+            dto.setProduct(toProductDTO(item.getProduct()));
         }
 
-        // Map supplier association
-        if (item.getSupplier() != null) {
-            dto.setSupplierId(item.getSupplier().getSuppId());
-        }
-
-        // Load inventory quantity from separate Inventory entity
+        // Quantity from separate Inventory entity — NOT on Item entity.
+        // In the monolith, this was populated by a SQL JOIN in ItemMapper.xml:
+        //   SELECT ... QTY AS quantity ... FROM ITEM, INVENTORY WHERE ...
+        // In the decomposed architecture, Item and Inventory are separate entities.
         int quantity = inventoryService.getInventoryQuantity(item.getItemId());
         dto.setQuantity(quantity);
 
+        return dto;
+    }
+
+    /**
+     * Converts a {@link Product} JPA entity to a {@link ProductDTO} for nesting
+     * inside an {@link ItemDTO}.
+     *
+     * <p>Flattens the Product entity's {@code @ManyToOne Category} relationship
+     * to a plain {@code categoryId} String via
+     * {@code product.getCategory().getCatId()} (null-safe).</p>
+     *
+     * <p>This is the same mapping logic as {@code ProductController.toDTO()} —
+     * duplicated here to keep controllers independent with no shared mapping
+     * utility class, avoiding unnecessary coupling between controllers.</p>
+     *
+     * @param product the product entity to convert; must not be {@code null}
+     * @return the populated {@link ProductDTO}
+     */
+    private ProductDTO toProductDTO(Product product) {
+        ProductDTO dto = new ProductDTO();
+        dto.setProductId(product.getProductId());
+        dto.setCategoryId(product.getCategory() != null
+                ? product.getCategory().getCatId() : null);
+        dto.setName(product.getName());
+        dto.setDescription(product.getDescription());
         return dto;
     }
 }
