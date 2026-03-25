@@ -42,7 +42,7 @@
 # Database-per-Service Boundary:
 #   Account DB (jpetstore_account): signon, account, profile, bannerdata
 #   Catalog DB (jpetstore_catalog): supplier, category, product, item, inventory
-#   Order DB   (jpetstore_order):   orders, orderstatus, lineitem, sequence
+#   Order DB   (jpetstore_order):   orders, orderstatus, lineitem
 #
 # Usage:
 #   ./validate-integrity.sh
@@ -54,8 +54,12 @@
 #   PG_ACCOUNT_URL     Account DB JDBC    (default: jdbc:postgresql://localhost:5432/jpetstore_account)
 #   PG_CATALOG_URL     Catalog DB JDBC    (default: jdbc:postgresql://localhost:5433/jpetstore_catalog)
 #   PG_ORDER_URL       Order DB JDBC      (default: jdbc:postgresql://localhost:5434/jpetstore_order)
-#   PG_USER            PostgreSQL user    (default: jpetstore)
-#   PG_PASSWORD        PostgreSQL pass    (default: jpetstore)
+#   PG_ACCOUNT_USER    Account DB user    (default: account_user)
+#   PG_ACCOUNT_PASSWORD Account DB pass   (default: account_pass)
+#   PG_CATALOG_USER    Catalog DB user    (default: catalog_user)
+#   PG_CATALOG_PASSWORD Catalog DB pass   (default: catalog_pass)
+#   PG_ORDER_USER      Order DB user      (default: order_user)
+#   PG_ORDER_PASSWORD  Order DB pass      (default: order_pass)
 #   EXPORT_DIR         CSV export dir     (default: <project_root>/migration/output/export)
 #   JAVA_HOME          JDK location       (optional if java is on PATH)
 #
@@ -99,9 +103,13 @@ PG_ACCOUNT_URL="${PG_ACCOUNT_URL:-jdbc:postgresql://localhost:5432/jpetstore_acc
 PG_CATALOG_URL="${PG_CATALOG_URL:-jdbc:postgresql://localhost:5433/jpetstore_catalog}"
 PG_ORDER_URL="${PG_ORDER_URL:-jdbc:postgresql://localhost:5434/jpetstore_order}"
 
-# Shared PostgreSQL service credentials
-PG_USER="${PG_USER:-jpetstore}"
-PG_PASSWORD="${PG_PASSWORD:-jpetstore}"
+# Per-database PostgreSQL service credentials (matching docker-compose.yml)
+PG_ACCOUNT_USER="${PG_ACCOUNT_USER:-account_user}"
+PG_ACCOUNT_PASSWORD="${PG_ACCOUNT_PASSWORD:-account_pass}"
+PG_CATALOG_USER="${PG_CATALOG_USER:-catalog_user}"
+PG_CATALOG_PASSWORD="${PG_CATALOG_PASSWORD:-catalog_pass}"
+PG_ORDER_USER="${PG_ORDER_USER:-order_user}"
+PG_ORDER_PASSWORD="${PG_ORDER_PASSWORD:-order_pass}"
 
 # Export directory containing CSV files from export-hsqldb.sh
 EXPORT_DIR="${EXPORT_DIR:-${PROJECT_ROOT}/migration/output/export}"
@@ -186,10 +194,9 @@ echo ""
 log_info "Configuration:"
 log_info "  HSQLDB URL:     ${HSQLDB_URL}"
 log_info "  HSQLDB User:    ${HSQLDB_USER}"
-log_info "  Account DB:     ${PG_ACCOUNT_URL}"
-log_info "  Catalog DB:     ${PG_CATALOG_URL}"
-log_info "  Order DB:       ${PG_ORDER_URL}"
-log_info "  PG User:        ${PG_USER}"
+log_info "  Account DB:     ${PG_ACCOUNT_URL} (user: ${PG_ACCOUNT_USER})"
+log_info "  Catalog DB:     ${PG_CATALOG_URL} (user: ${PG_CATALOG_USER})"
+log_info "  Order DB:       ${PG_ORDER_URL} (user: ${PG_ORDER_USER})"
 log_info "  Export Dir:     ${EXPORT_DIR}"
 log_info "  Project Root:   ${PROJECT_ROOT}"
 echo ""
@@ -396,14 +403,14 @@ VALIDATOR_EXIT_CODE=0
     -Dhsqldb.user="${HSQLDB_USER}" \
     -Dhsqldb.password="${HSQLDB_PASSWORD}" \
     -Daccount.db.url="${PG_ACCOUNT_URL}" \
-    -Daccount.db.user="${PG_USER}" \
-    -Daccount.db.password="${PG_PASSWORD}" \
+    -Daccount.db.user="${PG_ACCOUNT_USER}" \
+    -Daccount.db.password="${PG_ACCOUNT_PASSWORD}" \
     -Dcatalog.db.url="${PG_CATALOG_URL}" \
-    -Dcatalog.db.user="${PG_USER}" \
-    -Dcatalog.db.password="${PG_PASSWORD}" \
+    -Dcatalog.db.user="${PG_CATALOG_USER}" \
+    -Dcatalog.db.password="${PG_CATALOG_PASSWORD}" \
     -Dorder.db.url="${PG_ORDER_URL}" \
-    -Dorder.db.user="${PG_USER}" \
-    -Dorder.db.password="${PG_PASSWORD}" \
+    -Dorder.db.user="${PG_ORDER_USER}" \
+    -Dorder.db.password="${PG_ORDER_PASSWORD}" \
     com.jpetstore.migration.IntegrityValidator \
     > "${RAW_OUTPUT}" 2>&1 || VALIDATOR_EXIT_CODE=$?
 

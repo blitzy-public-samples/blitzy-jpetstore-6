@@ -88,6 +88,16 @@
       <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
 
+    <!-- Spring Security for defense-in-depth security headers (X-Content-Type-Options,
+         X-Frame-Options, Cache-Control, etc.) and endpoint security configuration.
+         Cart operations permit anonymous access; order operations will require authentication
+         when full JWT integration is enabled. Matches the security posture of
+         Account Service and Catalog Service. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-security</artifactId>
+    </dependency>
+
     <!-- ======== -->
     <!-- Database -->
     <!-- ======== -->
@@ -116,6 +126,13 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- Spring Security test support for @WithMockUser, SecurityMockMvcRequestPostProcessors -->
+    <dependency>
+      <groupId>org.springframework.security</groupId>
+      <artifactId>spring-security-test</artifactId>
       <scope>test</scope>
     </dependency>
 
@@ -149,6 +166,13 @@
       <plugin>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+          </execution>
+        </executions>
       </plugin>
     </plugins>
   </build>

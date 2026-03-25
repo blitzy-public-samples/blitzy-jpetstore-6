@@ -84,18 +84,21 @@ public final class SchemaMapper {
     /** Target PostgreSQL database for the Catalog/Inventory bounded context (supplier, category, product, item, inventory). */
     public static final String CATALOG_DB = "jpetstore_catalog";
 
-    /** Target PostgreSQL database for the Order/Cart bounded context (orders, orderstatus, lineitem, sequence). */
+    /** Target PostgreSQL database for the Order/Cart bounded context (orders, orderstatus, lineitem).
+     *  Note: The sequence table is NOT migrated — replaced by PostgreSQL native sequence order_id_seq (per AAP §0.7.3). */
     public static final String ORDER_DB = "jpetstore_order";
 
     // ==========================================
     // Static Data Structures
     // ==========================================
 
-    /** Set of all valid table names for O(1) lookup validation. */
+    /** Set of all valid table names for O(1) lookup validation.
+     *  Note: "sequence" is excluded — it is decommissioned after Order Service cutover (AAP §0.7.3),
+     *  replaced by PostgreSQL native sequence order_id_seq. 12 tables total (not 13). */
     private static final Set<String> VALID_TABLE_NAMES = Set.of(
             "supplier", "signon", "account", "profile", "bannerdata",
             "orders", "orderstatus", "lineitem",
-            "category", "product", "item", "inventory", "sequence"
+            "category", "product", "item", "inventory"
     );
 
     /** Maps each table name to its target PostgreSQL database. */
@@ -104,7 +107,8 @@ public final class SchemaMapper {
     /** Maps each database name to its tables in FK-safe load order. */
     private static final Map<String, List<String>> DB_TO_TABLES;
 
-    /** All 13 table names in export order (account DB tables, then catalog DB, then order DB). */
+    /** All 12 table names in export order (account DB tables, then catalog DB, then order DB).
+     *  Note: sequence table excluded — replaced by PostgreSQL native sequence (AAP §0.7.3). */
     private static final List<String> ALL_TABLE_NAMES;
 
     /** All 3 database names in recommended cutover order. */
@@ -137,7 +141,7 @@ public final class SchemaMapper {
         DB_TO_TABLES = Map.of(
                 ACCOUNT_DB, List.of("signon", "account", "profile", "bannerdata"),
                 CATALOG_DB, List.of("supplier", "category", "product", "item", "inventory"),
-                ORDER_DB, List.of("sequence", "orders", "orderstatus", "lineitem")
+                ORDER_DB, List.of("orders", "orderstatus", "lineitem")
         );
 
         // ------------------------------------------------------------------
@@ -161,7 +165,7 @@ public final class SchemaMapper {
         TABLE_TO_DB = Map.copyOf(tableDbMap);
 
         // ------------------------------------------------------------------
-        // 4. Column definitions for all 13 tables
+        // 4. Column definitions for all 12 migrated tables (sequence excluded — AAP §0.7.3)
         //    ColDef(name, hsqldbType, pgType, nullable)
         //    Column order matches the CREATE TABLE statement in schema.sql.
         //    Type mapping rules:
@@ -260,14 +264,12 @@ public final class SchemaMapper {
         // from the original HSQLDB names. The hsqldbName preserves the source name
         // for data export, while pgName matches the Order Service Liquibase schema.
 
-        colMap.put("sequence", List.of(
-                new ColDef("name", "name", "varchar(30)", "varchar(30)", false),
-                new ColDef("nextid", "nextid", "int", "integer", false)
-        ));
+        // Note: sequence table is NOT migrated — replaced by PostgreSQL native sequence
+        // order_id_seq in Order Service Liquibase schema (per AAP §0.7.3).
 
         colMap.put("orders", List.of(
                 new ColDef("orderid", "order_id", "int", "integer", false),
-                new ColDef("userid", "username", "varchar(80)", "varchar(80)", false),
+                new ColDef("userid", "userid", "varchar(80)", "varchar(80)", false),
                 new ColDef("orderdate", "order_date", "date", "timestamp with time zone", false),
                 new ColDef("shipaddr1", "ship_addr1", "varchar(80)", "varchar(80)", false),
                 new ColDef("shipaddr2", "ship_addr2", "varchar(80)", "varchar(80)", true),
@@ -328,7 +330,7 @@ public final class SchemaMapper {
         pkMap.put("product", List.of("productid"));
         pkMap.put("item", List.of("itemid"));
         pkMap.put("inventory", List.of("itemid"));
-        pkMap.put("sequence", List.of("name"));
+        // Note: sequence table excluded — replaced by PostgreSQL native sequence (AAP §0.7.3)
         PRIMARY_KEYS = Map.copyOf(pkMap);
 
         // ------------------------------------------------------------------
@@ -348,7 +350,7 @@ public final class SchemaMapper {
         // Account/Catalog DB PostgreSQL names (HSQLDB-identical).
         CROSS_SERVICE_FKS = List.of(
                 new ForeignKey("lineitem", "item_id", "item", "itemid", true),
-                new ForeignKey("orders", "username", "account", "userid", true)
+                new ForeignKey("orders", "userid", "account", "userid", true)
         );
 
         // Combined list of all FKs (5 total: 3 intra-service + 2 cross-service)
@@ -393,7 +395,7 @@ public final class SchemaMapper {
     }
 
     /**
-     * Returns all 13 table names in export order (account DB tables first,
+     * Returns all 12 migrated table names in export order (account DB tables first,
      * then catalog DB tables, then order DB tables).
      *
      * @return unmodifiable list of all table names

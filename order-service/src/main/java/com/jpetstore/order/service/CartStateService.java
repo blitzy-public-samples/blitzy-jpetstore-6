@@ -33,6 +33,7 @@ import com.jpetstore.order.dto.CartDTO;
 import com.jpetstore.order.dto.CartItemDTO;
 import com.jpetstore.order.entity.CartState;
 import com.jpetstore.order.entity.CartState.CartItemData;
+import com.jpetstore.order.exception.ResourceNotFoundException;
 import com.jpetstore.order.repository.CartStateRepository;
 
 /**
@@ -143,7 +144,7 @@ public class CartStateService {
      * @param cartId the cart identifier (session ID or username)
      * @param itemId the catalog item identifier to add
      * @return the updated cart as a {@link CartDTO}
-     * @throws RuntimeException if the item cannot be found in the Catalog Service
+     * @throws ResourceNotFoundException if the item cannot be found in the Catalog Service
      */
     public CartDTO addItem(String cartId, String itemId) {
         CartState cart = cartStateRepository.findById(cartId)
@@ -172,7 +173,7 @@ public class CartStateService {
             if (!itemDataOpt.isPresent()) {
                 log.warn("Cannot add item to cart: item not found in Catalog Service: itemId={}",
                         itemId);
-                throw new RuntimeException("Item not found in Catalog Service: " + itemId);
+                throw new ResourceNotFoundException("Item " + itemId + " not found in catalog");
             }
 
             Map<String, Object> itemData = itemDataOpt.orElseThrow();
@@ -214,16 +215,16 @@ public class CartStateService {
      * @param cartId the cart identifier (session ID or username)
      * @param itemId the catalog item identifier to remove
      * @return the updated cart as a {@link CartDTO}
-     * @throws RuntimeException if the cart does not exist or the item is not in the cart
+     * @throws ResourceNotFoundException if the cart does not exist or the item is not in the cart
      */
     public CartDTO removeItemById(String cartId, String itemId) {
         CartState cart = cartStateRepository.findById(cartId)
-                .orElseThrow(() -> new RuntimeException("Cart not found: " + cartId));
+                .orElseThrow(() -> new ResourceNotFoundException("Cart not found: " + cartId));
 
         CartItemData removed = cart.getItems().remove(itemId);
         if (removed == null) {
             log.warn("Attempted to remove item not in cart: cartId={}, itemId={}", cartId, itemId);
-            throw new RuntimeException("Item not in cart: " + itemId);
+            throw new ResourceNotFoundException("Item " + itemId + " not in cart");
         }
 
         cart.setLastUpdated(Instant.now());

@@ -42,11 +42,13 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jpetstore.order.config.SecurityConfig;
 import com.jpetstore.order.dto.CartDTO;
 import com.jpetstore.order.dto.CartItemDTO;
 import com.jpetstore.order.service.CartStateService;
@@ -76,6 +78,7 @@ import com.jpetstore.order.service.CartStateService;
  * @see CartStateService
  */
 @WebMvcTest(CartController.class)
+@Import(SecurityConfig.class)
 class CartControllerTest {
 
     @Autowired

@@ -96,6 +96,18 @@ public class JwtTokenProvider {
     private long jwtExpirationMs;
 
     /**
+     * Token issuer identifier.
+     *
+     * <p>Loaded from the {@code jwt.issuer} property in {@code application.yml}.
+     * This value is embedded in the JWT's {@code iss} claim and must match the
+     * expected issuer configured in the API Gateway's AuthenticationFilter
+     * ({@code jwt.issuer} in the gateway's {@code application.yml}).
+     * Defaults to "jpetstore" to match the gateway's default.</p>
+     */
+    @Value("${jwt.issuer:jpetstore}")
+    private String jwtIssuer;
+
+    /**
      * Creates the HMAC-SHA256 signing key from the configured secret string.
      *
      * <p>Converts the {@code jwt.secret} string to bytes using UTF-8 encoding
@@ -140,6 +152,7 @@ public class JwtTokenProvider {
 
         return Jwts.builder()
                 .subject(username)
+                .issuer(jwtIssuer)
                 .issuedAt(now)
                 .expiration(expiryDate)
                 .signWith(getSigningKey())

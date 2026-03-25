@@ -155,6 +155,13 @@ spring:
     redis:
       host: redis
       port: 6379
+      timeout: 5000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 2
+          max-wait: 2000ms
 
 # -----------------------------------------------------------------------------
 # Inter-Service REST Client URLs

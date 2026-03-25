@@ -39,6 +39,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 
 import com.jpetstore.order.dto.CartDTO;
+import com.jpetstore.order.exception.ResourceNotFoundException;
 import com.jpetstore.order.service.CartStateService;
 
 /**
@@ -137,6 +138,22 @@ public class CartController {
                 .collect(Collectors.joining("; "));
         log.warn("Constraint violation on cart request: {}", violations);
         return ResponseEntity.badRequest().body(violations);
+    }
+
+    /**
+     * Handles resource-not-found errors from CartStateService operations.
+     *
+     * <p>Maps {@link ResourceNotFoundException} to HTTP 404 Not Found with a
+     * structured JSON error body, replacing the previous behavior where
+     * unhandled {@code RuntimeException}s resulted in HTTP 500.</p>
+     *
+     * @param ex the resource-not-found exception
+     * @return {@code 404 Not Found} with error details as a JSON map
+     */
+    @ExceptionHandler(ResourceNotFoundException.class)
+    public ResponseEntity<Map<String, String>> handleResourceNotFound(ResourceNotFoundException ex) {
+        log.warn("Resource not found: {}", ex.getMessage());
+        return ResponseEntity.status(404).body(Map.of("error", ex.getMessage()));
     }
 
     // -----------------------------------------------------------------------

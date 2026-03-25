@@ -76,7 +76,7 @@ routing:
 # for production deployments.
 # =============================================================================
 jwt:
-  secret: ${JWT_SECRET:jpetstore-jwt-secret-key-for-development-only-change-in-production}
+  secret: ${JWT_SECRET:jpetstore-shared-jwt-secret-key-change-in-production-minimum-256-bits}
   issuer: jpetstore
   expiration: 3600
 
