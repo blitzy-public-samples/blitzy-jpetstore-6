@@ -15,20 +15,26 @@
  */
 package org.mybatis.jpetstore.web.actions;
 
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import net.sourceforge.stripes.action.DefaultHandler;
 import net.sourceforge.stripes.action.ForwardResolution;
 import net.sourceforge.stripes.action.SessionScope;
-import net.sourceforge.stripes.integration.spring.SpringBean;
 
 import org.mybatis.jpetstore.domain.Category;
 import org.mybatis.jpetstore.domain.Item;
 import org.mybatis.jpetstore.domain.Product;
-import org.mybatis.jpetstore.service.CatalogService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.web.client.RestTemplate;
 
 /**
  * The Class CatalogActionBean.
+ *
+ * <p>Session-scoped catalog browsing controller. Calls Catalog Service REST API
+ * via {@link RestTemplate} for all catalog reads (categories, products, items, search).</p>
  *
  * @author Eduardo Macarron
  */
@@ -43,8 +49,11 @@ public class CatalogActionBean extends AbstractActionBean {
   private static final String VIEW_ITEM = "/WEB-INF/jsp/catalog/Item.jsp";
   private static final String SEARCH_PRODUCTS = "/WEB-INF/jsp/catalog/SearchProducts.jsp";
 
-  @SpringBean
-  private transient CatalogService catalogService;
+  private static final Logger LOG = LoggerFactory.getLogger(CatalogActionBean.class);
+
+  private transient RestTemplate restTemplate;
+
+  private static final String CATALOG_SERVICE_URL = "http://catalog-service:8082/api";
 
   private String keyword;
 
@@ -59,6 +68,20 @@ public class CatalogActionBean extends AbstractActionBean {
   private String itemId;
   private Item item;
   private List<Item> itemList;
+
+  /**
+   * Lazily initializes and returns the {@link RestTemplate} instance used for REST API calls
+   * to the Catalog Service microservice. The RestTemplate is transient (not serialized with
+   * the session-scoped ActionBean) and is recreated if null after deserialization.
+   *
+   * @return the RestTemplate instance
+   */
+  private RestTemplate getRestTemplate() {
+    if (restTemplate == null) {
+      restTemplate = new RestTemplate();
+    }
+    return restTemplate;
+  }
 
   public String getKeyword() {
     return keyword;
@@ -148,12 +171,26 @@ public class CatalogActionBean extends AbstractActionBean {
   /**
    * View category.
    *
+   * <p>Retrieves the product list and category details from the Catalog Service REST API
+   * for the currently selected {@code categoryId}. On failure, forwards to the error page
+   * with a user-friendly message.</p>
+   *
    * @return the forward resolution
    */
   public ForwardResolution viewCategory() {
     if (categoryId != null) {
-      productList = catalogService.getProductListByCategory(categoryId);
-      category = catalogService.getCategory(categoryId);
+      try {
+        Product[] products = getRestTemplate().getForObject(
+            CATALOG_SERVICE_URL + "/products?categoryId=" + categoryId, Product[].class);
+        productList = products != null ? Arrays.asList(products) : Collections.emptyList();
+
+        category = getRestTemplate().getForObject(
+            CATALOG_SERVICE_URL + "/categories/" + categoryId, Category.class);
+      } catch (Exception e) {
+        LOG.error("Failed to load category {}: {}", categoryId, e.getMessage());
+        setMessage("Unable to load category. Please try again.");
+        return new ForwardResolution(ERROR);
+      }
     }
     return new ForwardResolution(VIEW_CATEGORY);
   }
@@ -161,12 +198,26 @@ public class CatalogActionBean extends AbstractActionBean {
   /**
    * View product.
    *
+   * <p>Retrieves the item list and product details from the Catalog Service REST API
+   * for the currently selected {@code productId}. On failure, forwards to the error page
+   * with a user-friendly message.</p>
+   *
    * @return the forward resolution
    */
   public ForwardResolution viewProduct() {
     if (productId != null) {
-      itemList = catalogService.getItemListByProduct(productId);
-      product = catalogService.getProduct(productId);
+      try {
+        Item[] items = getRestTemplate().getForObject(
+            CATALOG_SERVICE_URL + "/items?productId=" + productId, Item[].class);
+        itemList = items != null ? Arrays.asList(items) : Collections.emptyList();
+
+        product = getRestTemplate().getForObject(
+            CATALOG_SERVICE_URL + "/products/" + productId, Product.class);
+      } catch (Exception e) {
+        LOG.error("Failed to load product {}: {}", productId, e.getMessage());
+        setMessage("Unable to load product. Please try again.");
+        return new ForwardResolution(ERROR);
+      }
     }
     return new ForwardResolution(VIEW_PRODUCT);
   }
@@ -174,16 +225,32 @@ public class CatalogActionBean extends AbstractActionBean {
   /**
    * View item.
    *
+   * <p>Retrieves a single item from the Catalog Service REST API by {@code itemId} and
+   * extracts the associated product reference from the deserialized Item domain object.
+   * On failure, forwards to the error page with a user-friendly message.</p>
+   *
    * @return the forward resolution
    */
   public ForwardResolution viewItem() {
-    item = catalogService.getItem(itemId);
-    product = item.getProduct();
+    try {
+      item = getRestTemplate().getForObject(
+          CATALOG_SERVICE_URL + "/items/" + itemId, Item.class);
+      product = item.getProduct();
+    } catch (Exception e) {
+      LOG.error("Failed to load item {}: {}", itemId, e.getMessage());
+      setMessage("Unable to load item. Please try again.");
+      return new ForwardResolution(ERROR);
+    }
     return new ForwardResolution(VIEW_ITEM);
   }
 
   /**
    * Search products.
+   *
+   * <p>Validates that a non-empty keyword is provided, then searches for matching products
+   * via the Catalog Service REST API. The keyword is lowercased before sending to preserve
+   * the original case-insensitive search behavior. On failure, forwards to the error page
+   * with a user-friendly message.</p>
    *
    * @return the forward resolution
    */
@@ -192,7 +259,15 @@ public class CatalogActionBean extends AbstractActionBean {
       setMessage("Please enter a keyword to search for, then press the search button.");
       return new ForwardResolution(ERROR);
     } else {
-      productList = catalogService.searchProductList(keyword.toLowerCase());
+      try {
+        Product[] products = getRestTemplate().getForObject(
+            CATALOG_SERVICE_URL + "/products/search?keywords=" + keyword.toLowerCase(), Product[].class);
+        productList = products != null ? Arrays.asList(products) : Collections.emptyList();
+      } catch (Exception e) {
+        LOG.error("Failed to search products for keyword '{}': {}", keyword, e.getMessage());
+        setMessage("Unable to search products. Please try again.");
+        return new ForwardResolution(ERROR);
+      }
       return new ForwardResolution(SEARCH_PRODUCTS);
     }
   }
