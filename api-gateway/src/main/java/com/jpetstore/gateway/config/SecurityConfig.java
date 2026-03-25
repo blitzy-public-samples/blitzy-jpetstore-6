@@ -24,11 +24,13 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.server.PathContainer;
 import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity;
 import org.springframework.security.config.web.server.SecurityWebFiltersOrder;
 import org.springframework.security.config.web.server.ServerHttpSecurity;
 import org.springframework.security.web.server.SecurityWebFilterChain;
+import org.springframework.security.web.server.authentication.HttpStatusServerEntryPoint;
 import org.springframework.security.web.server.util.matcher.ServerWebExchangeMatcher;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.reactive.CorsConfigurationSource;
@@ -259,6 +261,17 @@ public class SecurityConfig {
                         // This includes the root path (/), index.html, help.html, and any
                         // other monolith-served content that is routed through the gateway.
                         .anyExchange().permitAll()
+                )
+
+                // Configure exception handling to return plain 401 Unauthorized without
+                // any WWW-Authenticate challenge header. The gateway uses JWT tokens
+                // exclusively — there is no browser-based authentication challenge.
+                // Without this explicit entry point, Spring Security's default
+                // HttpBasicServerAuthenticationEntryPoint would add a
+                // "WWW-Authenticate: Basic realm=..." header on every 401 response.
+                .exceptionHandling(exceptions -> exceptions
+                        .authenticationEntryPoint(
+                                new HttpStatusServerEntryPoint(HttpStatus.UNAUTHORIZED))
                 )
 
                 // Disable HTTP basic authentication — the gateway uses JWT tokens
