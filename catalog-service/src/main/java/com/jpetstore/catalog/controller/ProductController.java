@@ -130,15 +130,14 @@ public class ProductController {
     @GetMapping("/{id}")
     public ResponseEntity<ProductDTO> getProductById(@PathVariable String id) {
         log.debug("GET /api/products/{} — fetching product", id);
-        return catalogService.getProduct(id)
-                .map(product -> {
-                    log.debug("Product found: {}", id);
-                    return ResponseEntity.ok(toDTO(product));
-                })
-                .orElseGet(() -> {
-                    log.debug("Product not found: {}", id);
-                    return ResponseEntity.notFound().build();
-                });
+        Product product = catalogService.getProduct(id);
+        if (product != null) {
+            log.debug("Product found: {}", id);
+            return ResponseEntity.ok(toDTO(product));
+        } else {
+            log.debug("Product not found: {}", id);
+            return ResponseEntity.notFound().build();
+        }
     }
 
     /**

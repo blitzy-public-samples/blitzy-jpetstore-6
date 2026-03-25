@@ -97,15 +97,14 @@ public class CategoryController {
     @GetMapping("/{id}")
     public ResponseEntity<CategoryDTO> getCategoryById(@PathVariable String id) {
         log.debug("GET /api/categories/{} — fetching category", id);
-        return catalogService.getCategory(id)
-                .map(category -> {
-                    log.debug("Category found: {}", id);
-                    return ResponseEntity.ok(toDTO(category));
-                })
-                .orElseGet(() -> {
-                    log.debug("Category not found: {}", id);
-                    return ResponseEntity.notFound().build();
-                });
+        Category category = catalogService.getCategory(id);
+        if (category != null) {
+            log.debug("Category found: {}", id);
+            return ResponseEntity.ok(toDTO(category));
+        } else {
+            log.debug("Category not found: {}", id);
+            return ResponseEntity.notFound().build();
+        }
     }
 
     /**

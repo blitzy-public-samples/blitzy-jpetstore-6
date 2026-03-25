@@ -124,15 +124,14 @@ public class ItemController {
     @GetMapping("/{id}")
     public ResponseEntity<ItemDTO> getItemById(@PathVariable String id) {
         log.debug("GET /api/items/{} — fetching item", id);
-        return catalogService.getItem(id)
-                .map(item -> {
-                    log.debug("Item found: {}", id);
-                    return ResponseEntity.ok(toDTO(item));
-                })
-                .orElseGet(() -> {
-                    log.debug("Item not found: {}", id);
-                    return ResponseEntity.notFound().build();
-                });
+        Item item = catalogService.getItem(id);
+        if (item != null) {
+            log.debug("Item found: {}", id);
+            return ResponseEntity.ok(toDTO(item));
+        } else {
+            log.debug("Item not found: {}", id);
+            return ResponseEntity.notFound().build();
+        }
     }
 
     /**
@@ -148,7 +147,7 @@ public class ItemController {
     @GetMapping("/{id}/inventory")
     public ResponseEntity<Integer> getInventoryQuantity(@PathVariable String id) {
         log.debug("GET /api/items/{}/inventory — fetching inventory quantity", id);
-        int quantity = catalogService.getInventoryQuantity(id);
+        int quantity = inventoryService.getInventoryQuantity(id);
         log.debug("Inventory quantity for item '{}': {}", id, quantity);
         return ResponseEntity.ok(quantity);
     }
@@ -269,7 +268,7 @@ public class ItemController {
         }
 
         // Load inventory quantity from separate Inventory entity
-        int quantity = catalogService.getInventoryQuantity(item.getItemId());
+        int quantity = inventoryService.getInventoryQuantity(item.getItemId());
         dto.setQuantity(quantity);
 
         return dto;
