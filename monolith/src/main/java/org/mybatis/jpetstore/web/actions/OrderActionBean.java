@@ -24,13 +24,28 @@ import javax.servlet.http.HttpSession;
 import net.sourceforge.stripes.action.ForwardResolution;
 import net.sourceforge.stripes.action.Resolution;
 import net.sourceforge.stripes.action.SessionScope;
-import net.sourceforge.stripes.integration.spring.SpringBean;
 
+import org.mybatis.jpetstore.domain.Account;
+import org.mybatis.jpetstore.domain.Cart;
 import org.mybatis.jpetstore.domain.Order;
-import org.mybatis.jpetstore.service.OrderService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.client.RestTemplate;
 
 /**
  * The Class OrderActionBean.
+ *
+ * <p>Session-scoped checkout and order-history controller. Coordinates multi-step order
+ * creation (new order form &rarr; shipping &rarr; confirmation &rarr; submission), order
+ * listing, and order viewing. Calls Order Service REST API via {@link RestTemplate},
+ * replacing the previous {@code @SpringBean} injection of {@code OrderService} as part
+ * of the monolith-to-microservices Strangler Fig migration.</p>
+ *
+ * <p>During the transition period, authentication state is read from the session-scoped
+ * {@link AccountActionBean} (which itself now calls Account Service REST API internally).
+ * Cart state is first attempted from the externalized cart store via Order Service REST API,
+ * with a fallback to the session-scoped {@link CartActionBean} if the REST call fails.</p>
  *
  * @author Eduardo Macarron
  */
@@ -47,8 +62,16 @@ public class OrderActionBean extends AbstractActionBean {
 
   private static final List<String> CARD_TYPE_LIST;
 
-  @SpringBean
-  private transient OrderService orderService;
+  private static final Logger LOG = LoggerFactory.getLogger(OrderActionBean.class);
+
+  /** Transient REST client — recreated lazily after session deserialization. */
+  private transient RestTemplate restTemplate;
+
+  /** Base URL for Order Service REST API (order CRUD and cart state). */
+  private static final String ORDER_SERVICE_URL = "http://order-service:8083/api";
+
+  /** Base URL for externalized cart state managed by Order Service REST API. */
+  private static final String CART_SERVICE_URL = "http://order-service:8083/api/cart";
 
   private Order order = new Order();
   private boolean shippingAddressRequired;
@@ -57,6 +80,20 @@ public class OrderActionBean extends AbstractActionBean {
 
   static {
     CARD_TYPE_LIST = Collections.unmodifiableList(Arrays.asList("Visa", "MasterCard", "American Express"));
+  }
+
+  /**
+   * Lazily initializes and returns the {@link RestTemplate} instance used for REST API calls
+   * to the Order Service microservice. The RestTemplate is transient (not serialized with the
+   * session-scoped ActionBean) and is recreated if null after deserialization.
+   *
+   * @return the RestTemplate instance
+   */
+  private RestTemplate getRestTemplate() {
+    if (restTemplate == null) {
+      restTemplate = new RestTemplate();
+    }
+    return restTemplate;
   }
 
   public int getOrderId() {
@@ -102,31 +139,74 @@ public class OrderActionBean extends AbstractActionBean {
   /**
    * List orders.
    *
+   * <p>Retrieves the authenticated user's order history from the Order Service REST API.
+   * Redirects to the sign-on page if the user is not authenticated. Falls back to the
+   * error page if the REST call fails.</p>
+   *
    * @return the resolution
    */
   public Resolution listOrders() {
     HttpSession session = context.getRequest().getSession();
-    AccountActionBean accountBean = (AccountActionBean) session.getAttribute("/actions/Account.action");
-    orderList = orderService.getOrdersByUsername(accountBean.getAccount().getUsername());
+    String username = getAuthenticatedUsername(session);
+    if (username == null) {
+      setMessage("You must sign on before attempting to view orders.");
+      return new ForwardResolution(AccountActionBean.class);
+    }
+    try {
+      Order[] orders = getRestTemplate().getForObject(
+          ORDER_SERVICE_URL + "/orders?username=" + username, Order[].class);
+      orderList = orders != null ? Arrays.asList(orders) : Collections.emptyList();
+    } catch (Exception e) {
+      LOG.warn("Failed to retrieve orders for user {}: {}", username, e.getMessage());
+      setMessage("Unable to retrieve order list. Please try again.");
+      return new ForwardResolution(ERROR);
+    }
     return new ForwardResolution(LIST_ORDERS);
   }
 
   /**
    * New order form.
    *
+   * <p>Initiates the checkout process by retrieving the authenticated user's account and
+   * cart data. Cart state is first attempted from the externalized cart store via Order
+   * Service REST API, with a fallback to the session-scoped {@link CartActionBean} during
+   * the Strangler Fig transition period. Populates the order with account and cart data
+   * via {@link Order#initOrder(Account, Cart)}.</p>
+   *
    * @return the resolution
    */
   public Resolution newOrderForm() {
     HttpSession session = context.getRequest().getSession();
-    AccountActionBean accountBean = (AccountActionBean) session.getAttribute("/actions/Account.action");
-    CartActionBean cartBean = (CartActionBean) session.getAttribute("/actions/Cart.action");
-
     clear();
+
+    // Check authentication via session AccountActionBean (during transition, it stores REST-fetched account)
+    AccountActionBean accountBean = (AccountActionBean) session.getAttribute("/actions/Account.action");
     if (accountBean == null || !accountBean.isAuthenticated()) {
       setMessage("You must sign on before attempting to check out.  Please sign on and try checking out again.");
       return new ForwardResolution(AccountActionBean.class);
-    } else if (cartBean != null) {
-      order.initOrder(accountBean.getAccount(), cartBean.getCart());
+    }
+
+    Account account = accountBean.getAccount();
+
+    // Retrieve cart from externalized state via REST
+    Cart cart = null;
+    try {
+      cart = getRestTemplate().getForObject(
+          CART_SERVICE_URL + "/" + session.getId(), Cart.class);
+    } catch (Exception e) {
+      LOG.warn("Failed to retrieve cart from externalized state, falling back to session: {}", e.getMessage());
+    }
+
+    // Fallback: read cart from session CartActionBean during transition
+    if (cart == null) {
+      CartActionBean cartBean = (CartActionBean) session.getAttribute("/actions/Cart.action");
+      if (cartBean != null) {
+        cart = cartBean.getCart();
+      }
+    }
+
+    if (cart != null) {
+      order.initOrder(account, cart);
       return new ForwardResolution(NEW_ORDER);
     } else {
       setMessage("An order could not be created because a cart could not be found.");
@@ -136,6 +216,11 @@ public class OrderActionBean extends AbstractActionBean {
 
   /**
    * New order.
+   *
+   * <p>Processes the multi-step order submission. Handles the shipping address &rarr;
+   * confirmation &rarr; submission state machine. On final submission, posts the order
+   * to the Order Service REST API and clears both the externalized cart state and the
+   * session-scoped cart bean.</p>
    *
    * @return the resolution
    */
@@ -148,14 +233,35 @@ public class OrderActionBean extends AbstractActionBean {
     } else if (!isConfirmed()) {
       return new ForwardResolution(CONFIRM_ORDER);
     } else if (getOrder() != null) {
+      try {
+        // Submit order to Order Service REST API and capture the server response
+        // (which may include a server-assigned order ID and updated status)
+        ResponseEntity<Order> orderResponse = getRestTemplate().postForEntity(
+            ORDER_SERVICE_URL + "/orders", order, Order.class);
+        Order submittedOrder = orderResponse.getBody();
+        if (submittedOrder != null) {
+          order = submittedOrder;
+        }
+      } catch (Exception e) {
+        LOG.error("Failed to submit order: {}", e.getMessage());
+        setMessage("An error occurred processing your order. Please try again.");
+        return new ForwardResolution(ERROR);
+      }
 
-      orderService.insertOrder(order);
+      // Clear externalized cart state
+      try {
+        getRestTemplate().delete(CART_SERVICE_URL + "/" + session.getId());
+      } catch (Exception e) {
+        LOG.warn("Failed to clear externalized cart: {}", e.getMessage());
+      }
 
+      // Also clear session cart bean during transition
       CartActionBean cartBean = (CartActionBean) session.getAttribute("/actions/Cart.action");
-      cartBean.clear();
+      if (cartBean != null) {
+        cartBean.clear();
+      }
 
       setMessage("Thank you, your order has been submitted.");
-
       return new ForwardResolution(VIEW_ORDER);
     } else {
       setMessage("An error occurred processing your order (order was null).");
@@ -166,22 +272,61 @@ public class OrderActionBean extends AbstractActionBean {
   /**
    * View order.
    *
+   * <p>Retrieves a specific order from the Order Service REST API and verifies that
+   * the authenticated user owns the order before displaying it. Returns an error if
+   * the user is not authenticated, the order cannot be retrieved, or the user does
+   * not own the requested order.</p>
+   *
    * @return the resolution
    */
   public Resolution viewOrder() {
     HttpSession session = context.getRequest().getSession();
-
-    AccountActionBean accountBean = (AccountActionBean) session.getAttribute("accountBean");
-
-    order = orderService.getOrder(order.getOrderId());
-
-    if (accountBean.getAccount().getUsername().equals(order.getUsername())) {
+    String username = getAuthenticatedUsername(session);
+    if (username == null) {
+      setMessage("You must sign on to view orders.");
+      return new ForwardResolution(AccountActionBean.class);
+    }
+    try {
+      order = getRestTemplate().getForObject(
+          ORDER_SERVICE_URL + "/orders/" + order.getOrderId(), Order.class);
+    } catch (Exception e) {
+      LOG.warn("Failed to retrieve order {}: {}", order.getOrderId(), e.getMessage());
+      setMessage("Unable to retrieve order details.");
+      return new ForwardResolution(ERROR);
+    }
+    if (username.equals(order.getUsername())) {
       return new ForwardResolution(VIEW_ORDER);
     } else {
       order = null;
       setMessage("You may only view your own orders.");
       return new ForwardResolution(ERROR);
     }
+  }
+
+  /**
+   * Retrieves the authenticated username from the HTTP session.
+   *
+   * <p>During the Strangler Fig transition period, authentication state is read from the
+   * session-scoped {@link AccountActionBean} (which itself now calls Account Service REST
+   * API internally). Checks both session attribute keys used by the application:
+   * {@code "/actions/Account.action"} (standard Stripes session key) and
+   * {@code "accountBean"} (set explicitly in signon for backward compatibility).</p>
+   *
+   * @param session the current HTTP session
+   * @return the authenticated username, or {@code null} if the user is not authenticated
+   */
+  private String getAuthenticatedUsername(HttpSession session) {
+    // Check standard Stripes session attribute for AccountActionBean
+    AccountActionBean accountBean = (AccountActionBean) session.getAttribute("/actions/Account.action");
+    if (accountBean != null && accountBean.isAuthenticated()) {
+      return accountBean.getAccount().getUsername();
+    }
+    // Also check "accountBean" attribute (set explicitly in signon for backward compatibility)
+    accountBean = (AccountActionBean) session.getAttribute("accountBean");
+    if (accountBean != null && accountBean.isAuthenticated()) {
+      return accountBean.getAccount().getUsername();
+    }
+    return null;
   }
 
   /**
