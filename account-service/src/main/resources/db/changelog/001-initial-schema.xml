@@ -93,8 +93,8 @@
                 <constraints nullable="false"/>
             </column>
             <column name="favcategory" type="varchar(30)"/>
-            <column name="mylistopt" type="integer"/>
-            <column name="banneropt" type="integer"/>
+            <column name="mylistopt" type="boolean"/>
+            <column name="banneropt" type="boolean"/>
         </createTable>
 
         <!-- ============================================================ -->

@@ -15,15 +15,27 @@
  */
 package com.jpetstore.account.security;
 
+import java.io.IOException;
+import java.util.Collections;
+
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
  * Spring Security configuration for the Account Service microservice.
@@ -66,6 +78,17 @@ import org.springframework.security.web.SecurityFilterChain;
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
+
+    private final JwtTokenProvider jwtTokenProvider;
+
+    /**
+     * Constructs the SecurityConfig with the JWT token provider dependency.
+     *
+     * @param jwtTokenProvider the JWT token generation and validation provider
+     */
+    public SecurityConfig(JwtTokenProvider jwtTokenProvider) {
+        this.jwtTokenProvider = jwtTokenProvider;
+    }
 
     /**
      * Configures the HTTP security filter chain for the Account Service.
@@ -127,9 +150,50 @@ public class SecurityConfig {
                 // These correspond to the monolith's isAuthenticated() check
                 // (AccountActionBean line 195-197) that guarded account operations.
                 .anyRequest().authenticated()
-            );
+            )
+            // Add JWT authentication filter before Spring Security's username/password filter.
+            // This filter extracts the JWT from the Authorization header, validates it via
+            // JwtTokenProvider, and sets the SecurityContext so that .anyRequest().authenticated()
+            // passes for requests bearing a valid token.
+            .addFilterBefore(jwtAuthenticationFilter(), UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
+    }
+
+    /**
+     * Creates a JWT authentication filter that extracts and validates JWT tokens
+     * from the {@code Authorization: Bearer <token>} header.
+     *
+     * <p>This filter bridges the gap between the stateless JWT model and Spring
+     * Security's authentication framework. For each request with a valid JWT,
+     * it creates a {@link UsernamePasswordAuthenticationToken} and sets it in
+     * the {@link SecurityContextHolder}, enabling Spring Security's authorization
+     * checks ({@code .anyRequest().authenticated()}) to pass.</p>
+     *
+     * @return a {@link OncePerRequestFilter} that processes JWT tokens
+     */
+    private OncePerRequestFilter jwtAuthenticationFilter() {
+        return new OncePerRequestFilter() {
+            @Override
+            protected void doFilterInternal(HttpServletRequest request,
+                                            HttpServletResponse response,
+                                            FilterChain chain)
+                    throws ServletException, IOException {
+
+                String authHeader = request.getHeader("Authorization");
+                if (authHeader != null && authHeader.startsWith("Bearer ")) {
+                    String token = authHeader.substring(7);
+                    if (jwtTokenProvider.validateToken(token)) {
+                        String username = jwtTokenProvider.getUsernameFromToken(token);
+                        UsernamePasswordAuthenticationToken authentication =
+                                new UsernamePasswordAuthenticationToken(
+                                        username, null, Collections.emptyList());
+                        SecurityContextHolder.getContext().setAuthentication(authentication);
+                    }
+                }
+                chain.doFilter(request, response);
+            }
+        };
     }
 
     /**
