@@ -220,7 +220,7 @@ class CategoryRepositoryIT {
         // then
         assertThat(result).isPresent();
 
-        Category category = result.get();
+        Category category = result.orElseThrow();
         assertThat(category.getCatId()).isEqualTo("BIRDS");
         assertThat(category.getName()).isEqualTo("Birds");
         assertThat(category.getDescription())
