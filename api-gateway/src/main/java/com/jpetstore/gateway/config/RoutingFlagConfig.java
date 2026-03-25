@@ -15,6 +15,7 @@
  */
 package com.jpetstore.gateway.config;
 
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -141,7 +142,8 @@ public class RoutingFlagConfig {
      * @return a routing flag service instance configured with defaults from application.yml
      */
     @Bean
-    public RoutingFlagService routingFlagService(ReactiveRedisTemplate<String, String> redisTemplate) {
+    public RoutingFlagService routingFlagService(
+            @Qualifier("reactiveRedisTemplate") ReactiveRedisTemplate<String, String> redisTemplate) {
         return new RoutingFlagService(
                 redisTemplate,
                 cacheTtlSeconds,
