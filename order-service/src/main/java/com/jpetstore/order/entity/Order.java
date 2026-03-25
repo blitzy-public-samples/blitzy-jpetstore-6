@@ -73,7 +73,7 @@ import jakarta.persistence.Table;
  * <table>
  *   <tr><th>HSQLDB Column</th><th>PostgreSQL Column</th><th>Java Field</th><th>Java Type</th></tr>
  *   <tr><td>orderid</td><td>order_id</td><td>orderId</td><td>int</td></tr>
- *   <tr><td>userid</td><td>username</td><td>username</td><td>String</td></tr>
+ *   <tr><td>userid</td><td>userid</td><td>username</td><td>String</td></tr>
  *   <tr><td>orderdate</td><td>order_date</td><td>orderDate</td><td>LocalDateTime</td></tr>
  *   <tr><td>shipaddr1</td><td>ship_addr1</td><td>shipAddress1</td><td>String</td></tr>
  *   <tr><td>shipaddr2</td><td>ship_addr2</td><td>shipAddress2</td><td>String</td></tr>
@@ -141,10 +141,12 @@ public class Order implements Serializable {
      * User existence is verified at the application layer via REST API call
      * to Account Service ({@code GET /api/accounts/{username}}).</p>
      *
-     * <p>Renamed from HSQLDB {@code userid} to PostgreSQL {@code username}
-     * to match the domain model convention.</p>
+     * <p>The PostgreSQL column retains the original HSQLDB column name
+     * {@code userid} to maintain consistency with the data migration mapping.
+     * The Java field is named {@code username} to match the monolith's domain
+     * model convention.</p>
      */
-    @Column(name = "username", nullable = false, length = 80)
+    @Column(name = "userid", nullable = false, length = 80)
     private String username;
 
     // -----------------------------------------------------------------------
@@ -292,14 +294,16 @@ public class Order implements Serializable {
      * Order status for Saga orchestration state machine.
      *
      * <p>This column is NEW — not present in the monolith's HSQLDB schema.
-     * Values: "PE" (PENDING), "CO" (CONFIRMED), "FA" (FAILED).
+     * Values: "PENDING", "CONFIRMED", "FAILED".
      * Nullable for backward compatibility during data migration — migrated orders
      * from HSQLDB will have {@code null} status since the monolith does not
-     * track order status in this way.</p>
+     * track order status in this way. In the monolith, {@code Order.status} was
+     * set to "P" in {@code initOrder()} — the microservice uses full-length
+     * descriptive status strings for clarity.</p>
      *
      * @see com.jpetstore.order.saga.OrderSagaState
      */
-    @Column(name = "status", length = 2)
+    @Column(name = "status", length = 20)
     private String status;
 
     // -----------------------------------------------------------------------
@@ -797,7 +801,7 @@ public class Order implements Serializable {
     /**
      * Returns the order status for Saga orchestration.
      *
-     * @return the status code ("PE", "CO", "FA"), or {@code null} for migrated orders
+     * @return the status string ("PENDING", "CONFIRMED", "FAILED"), or {@code null} for migrated orders
      */
     public String getStatus() {
         return status;
@@ -806,7 +810,7 @@ public class Order implements Serializable {
     /**
      * Sets the order status for Saga orchestration.
      *
-     * @param status the status code to set ("PE", "CO", "FA")
+     * @param status the status string to set ("PENDING", "CONFIRMED", "FAILED")
      */
     public void setStatus(String status) {
         this.status = status;
@@ -828,6 +832,31 @@ public class Order implements Serializable {
      */
     public void setLineItems(List<LineItem> lineItems) {
         this.lineItems = lineItems;
+    }
+
+    // -----------------------------------------------------------------------
+    // Convenience Methods
+    // -----------------------------------------------------------------------
+
+    /**
+     * Adds a line item to this order's line item collection.
+     *
+     * <p>This convenience method provides a simple way to add individual line
+     * items to the order. It replaces the monolith's {@code addLineItem(LineItem)}
+     * method (line 331 in monolith Order.java). The monolith's overloaded
+     * {@code addLineItem(CartItem)} method is NOT included — CartItem conversion
+     * to LineItem is handled in the service layer via DTO mapping.</p>
+     *
+     * <p>Because the {@code lineItems} collection is annotated with
+     * {@code @OneToMany(cascade = CascadeType.ALL)}, any line item added via
+     * this method will be automatically persisted when the order is saved.</p>
+     *
+     * @param lineItem the line item to add to this order (must not be {@code null})
+     */
+    public void addLineItem(LineItem lineItem) {
+        if (lineItem != null) {
+            lineItems.add(lineItem);
+        }
     }
 
     // -----------------------------------------------------------------------
