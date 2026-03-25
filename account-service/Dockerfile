@@ -20,10 +20,11 @@
 # Produces an optimized, minimal Docker image for the Account Service
 # Spring Boot 3 microservice (Account/User Management bounded context).
 #
-# Build context: account-service/ directory
-#   docker build -t account-service .
+# Build context: repository root (set by docker-compose.yml: context: .)
+# This ensures the parent POM and all module sources are accessible during
+# the Docker build. The account-service module is built using the multi-module
+# Maven project structure with -pl account-service -am flags.
 #
-# Or from the repository root via docker-compose:
 #   docker-compose build account-service
 # ==============================================================================
 
@@ -34,23 +35,27 @@ FROM maven:3.9-eclipse-temurin-17 AS build
 
 WORKDIR /app
 
-# Copy the Maven POM first to leverage Docker layer caching for dependencies.
-# When only source code changes (not dependencies), this cached layer is reused,
-# significantly speeding up subsequent builds.
-COPY pom.xml .
+# Copy the parent POM and account-service POM first for Docker layer caching of
+# dependencies. This layer is only rebuilt when POM files change, saving
+# significant build time on iterative source code changes.
+COPY pom.xml ./pom.xml
+COPY account-service/pom.xml ./account-service/pom.xml
 
 # Pre-fetch dependencies into the local Maven repository (caching layer).
-# The '|| true' ensures the build continues even if the parent POM is not yet
-# available in a remote repository — the actual build step will resolve it.
-RUN mvn dependency:go-offline -B 2>/dev/null || true
+# Uses -pl account-service -am to resolve the parent POM and account-service deps.
+# The '|| true' ensures the build continues even if some dependencies cannot be
+# fully resolved offline; the package step will download any remaining artifacts.
+RUN mvn dependency:go-offline -B -pl account-service -am || true
 
-# Copy application source code
-COPY src/ ./src/
+# Copy account-service application source code
+COPY account-service/src/ ./account-service/src/
 
 # Build the executable Spring Boot JAR, skipping tests for faster image builds.
+# -pl account-service : Build only the account-service module
+# -am                 : Also build any modules that account-service depends on (parent)
 # Tests are expected to run in CI before the Docker build step.
-RUN mvn clean package -B -DskipTests \
-    && cp target/*.jar target/app.jar
+RUN mvn clean package -B -DskipTests -pl account-service -am \
+    && mv account-service/target/*.jar account-service/target/app.jar
 
 # ------------------------------------------------------------------------------
 # Stage 2: Runtime — Minimal JRE image for production execution
@@ -79,7 +84,7 @@ RUN groupadd --system appuser && \
     useradd --system --gid appuser --no-create-home appuser
 
 # Copy the executable JAR from the build stage
-COPY --from=build /app/target/app.jar app.jar
+COPY --from=build /app/account-service/target/app.jar app.jar
 
 # Set ownership to the non-root user
 RUN chown appuser:appuser app.jar

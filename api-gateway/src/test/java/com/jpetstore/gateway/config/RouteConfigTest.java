@@ -318,22 +318,28 @@ class RouteConfigTest {
      * microservice. No routing flag metadata should be present.</p>
      */
     @Test
-    void catalogApiRouteShouldAlwaysRouteToCatalogService() {
-        // given
-        Flux<Route> apiRoutes = routeLocator.getRoutes()
-                .filter(route -> "catalog-api".equals(route.getId()));
+    void catalogApiRoutesShouldAlwaysRouteToCatalogService() {
+        // given — three catalog API routes per AAP Section 0.4.1:
+        // /api/categories/**, /api/products/**, /api/items/**
+        List<String> catalogRouteIds = List.of(
+                "catalog-categories-api", "catalog-products-api", "catalog-items-api");
 
-        // when / then
-        StepVerifier.create(apiRoutes.next())
-                .expectNextMatches(route -> {
-                    // Always routes to catalog service — not flag-controlled
-                    assertThat(route.getUri().toString())
-                            .isEqualTo("http://catalog-service:8082");
-                    // No routing flag metadata — always microservice
-                    assertThat(route.getMetadata()).doesNotContainKey("routing-flag-key");
-                    return true;
-                })
-                .verifyComplete();
+        for (String routeId : catalogRouteIds) {
+            Flux<Route> apiRoutes = routeLocator.getRoutes()
+                    .filter(route -> routeId.equals(route.getId()));
+
+            // when / then — each catalog route targets catalog-service
+            StepVerifier.create(apiRoutes.next())
+                    .expectNextMatches(route -> {
+                        // Always routes to catalog service — not flag-controlled
+                        assertThat(route.getUri().toString())
+                                .isEqualTo("http://catalog-service:8082");
+                        // No routing flag metadata — always microservice
+                        assertThat(route.getMetadata()).doesNotContainKey("routing-flag-key");
+                        return true;
+                    })
+                    .verifyComplete();
+        }
     }
 
     /**
@@ -459,12 +465,13 @@ class RouteConfigTest {
     /**
      * Verifies that all expected routes are defined and no extra routes exist.
      *
-     * <p>Expected route inventory (11 total):</p>
+     * <p>Expected route inventory (13 total):</p>
      * <ul>
      *   <li>4 flag-controlled Strangler Fig routes: {@code account-actions},
      *       {@code catalog-actions}, {@code cart-actions}, {@code order-actions}</li>
-     *   <li>4 static microservice API routes: {@code account-api},
-     *       {@code catalog-api}, {@code order-api}, {@code cart-api}</li>
+     *   <li>6 static microservice API routes: {@code account-api},
+     *       {@code catalog-categories-api}, {@code catalog-products-api},
+     *       {@code catalog-items-api}, {@code order-api}, {@code cart-api}</li>
      *   <li>2 static asset routes: {@code static-css}, {@code static-images}</li>
      *   <li>1 catch-all fallback: {@code monolith-fallback}</li>
      * </ul>
@@ -476,8 +483,8 @@ class RouteConfigTest {
                 // then
                 .expectNextMatches(routes -> {
                     // Verify total route count:
-                    // 4 flag-controlled + 4 API + 2 static + 1 catch-all = 11
-                    assertThat(routes).hasSize(11);
+                    // 4 flag-controlled + 6 API + 2 static + 1 catch-all = 13
+                    assertThat(routes).hasSize(13);
 
                     // Verify all expected route IDs are present
                     List<String> routeIds = routes.stream()
@@ -491,8 +498,13 @@ class RouteConfigTest {
                             "cart-actions",
                             "order-actions",
                             // Static microservice API routes (/api/** patterns)
+                            // Account: single route for /api/accounts/**
                             "account-api",
-                            "catalog-api",
+                            // Catalog: three separate routes per AAP Section 0.4.1
+                            "catalog-categories-api",
+                            "catalog-products-api",
+                            "catalog-items-api",
+                            // Order + Cart: separate routes
                             "order-api",
                             "cart-api",
                             // Static asset routes (CSS and images)

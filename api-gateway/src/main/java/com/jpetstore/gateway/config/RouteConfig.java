@@ -186,11 +186,20 @@ public class RouteConfig {
                         .path("/api/accounts/**")
                         .uri(accountServiceUrl))
 
-                // Catalog Service REST API
-                // Endpoints: GET /api/catalog/categories, GET /api/catalog/products,
-                //            GET /api/catalog/items, POST /api/catalog/items/{id}/inventory/decrement
-                .route("catalog-api", r -> r
-                        .path("/api/catalog/**")
+                // Catalog Service REST API — three separate path-based routes
+                // matching AAP Section 0.4.1 endpoint specifications:
+                //   GET /api/categories, GET /api/categories/{id}
+                //   GET /api/products?categoryId=, GET /api/products/{id}, GET /api/products/search?keywords=
+                //   GET /api/items?productId=, GET /api/items/{id}, GET /api/items/{id}/inventory,
+                //   POST /api/items/{id}/inventory/decrement, POST /api/items/{id}/inventory/restore
+                .route("catalog-categories-api", r -> r
+                        .path("/api/categories/**")
+                        .uri(catalogServiceUrl))
+                .route("catalog-products-api", r -> r
+                        .path("/api/products/**")
+                        .uri(catalogServiceUrl))
+                .route("catalog-items-api", r -> r
+                        .path("/api/items/**")
                         .uri(catalogServiceUrl))
 
                 // Order Service REST API

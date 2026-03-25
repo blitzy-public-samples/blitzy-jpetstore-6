@@ -138,16 +138,17 @@ public class AccountService {
      * returns a null resultSet. Callers must check for null.</p>
      *
      * @param username the account userid (primary key)
-     * @return the assembled {@link AccountDTO} containing account, profile, and
-     *         banner data; or {@code null} if no account exists for the given username
+     * @return an {@link Optional} containing the assembled {@link AccountDTO} with account,
+     *         profile, and banner data; or {@link Optional#empty()} if no account exists
+     *         for the given username
      */
     @Transactional(readOnly = true)
-    public AccountDTO getAccount(String username) {
+    public Optional<AccountDTO> getAccount(String username) {
         // Step 1: Load Account entity by PK
         Account account = accountRepository.findById(username).orElse(null);
         if (account == null) {
             log.debug("Account not found for username: {}", username);
-            return null; // Mirrors monolith behavior: mapper returns null if user not found
+            return Optional.empty(); // Mirrors monolith behavior: mapper returns null if user not found
         }
 
         // Step 2: Load Profile entity (same PK as account)
@@ -164,7 +165,7 @@ public class AccountService {
         }
 
         // Step 4: Assemble into AccountDTO (replaces MyBatis 4-table resultMap)
-        return assembleAccountDTO(account, profile, bannerName);
+        return Optional.of(assembleAccountDTO(account, profile, bannerName));
     }
 
     /**
@@ -189,19 +190,20 @@ public class AccountService {
      *
      * @param username the username to authenticate
      * @param password the plaintext password to verify
-     * @return the user's {@link AccountDTO} if credentials are valid;
-     *         {@code null} if authentication fails or the user does not exist
+     * @return an {@link Optional} containing the user's {@link AccountDTO} if credentials
+     *         are valid; or {@link Optional#empty()} if authentication fails or the user
+     *         does not exist
      */
     @Transactional(readOnly = true)
-    public AccountDTO getAccountForAuth(String username, String password) {
+    public Optional<AccountDTO> getAccountForAuth(String username, String password) {
         // Step 1: Check credentials via SignonRepository
         Optional<Signon> signon = signonRepository.findByUsernameAndPassword(username, password);
         if (signon.isEmpty()) {
             log.debug("Authentication failed for username: {}", username);
-            return null; // Invalid credentials — mirrors monolith: returns null on auth failure
+            return Optional.empty(); // Invalid credentials — mirrors monolith: returns null on auth failure
         }
 
-        // Step 2: Load full account data (reuse getAccount method)
+        // Step 2: Load full account data (reuse getAccount method — returns Optional)
         return getAccount(username);
     }
 
@@ -234,9 +236,11 @@ public class AccountService {
      *
      * @param dto the account data to persist, including all account, profile,
      *            and signon fields
+     * @return the newly created {@link AccountDTO} as read back from the database,
+     *         confirming the 3-table insert succeeded
      */
     @Transactional
-    public void insertAccount(AccountDTO dto) {
+    public AccountDTO insertAccount(AccountDTO dto) {
         log.info("Creating new account for username: {}", dto.getUsername());
 
         // Step 1: Create and save Account entity (mirrors monolith: insertAccount, line 55)
@@ -271,6 +275,11 @@ public class AccountService {
         signonRepository.save(signon);
 
         log.info("Account created successfully for username: {}", dto.getUsername());
+
+        // Return the newly created account (re-read from DB to confirm persistence)
+        return getAccount(dto.getUsername())
+                .orElseThrow(() -> new RuntimeException(
+                        "Failed to retrieve newly created account: " + dto.getUsername()));
     }
 
     /**
@@ -299,11 +308,13 @@ public class AccountService {
      *
      * @param username the account userid to update (from path parameter, source of truth)
      * @param dto      the updated account data containing new field values
+     * @return an {@link Optional} containing the updated {@link AccountDTO} as read back
+     *         from the database; or {@link Optional#empty()} if the account was not found
      * @throws RuntimeException if no account exists for the given username
      * @throws RuntimeException if signon record not found during password update
      */
     @Transactional
-    public void updateAccount(String username, AccountDTO dto) {
+    public Optional<AccountDTO> updateAccount(String username, AccountDTO dto) {
         // Step 1: Load existing Account entity and update fields
         Account account = accountRepository.findById(username)
                 .orElseThrow(() -> new RuntimeException("Account not found: " + username));
@@ -341,6 +352,9 @@ public class AccountService {
                 });
 
         log.info("Account updated successfully for username: {}", username);
+
+        // Return the updated account (re-read from DB to confirm persistence)
+        return getAccount(username);
     }
 
     /**

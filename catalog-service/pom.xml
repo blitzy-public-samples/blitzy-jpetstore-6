@@ -60,6 +60,15 @@
       <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
 
+    <!-- Spring Security for defense-in-depth security headers on all responses.
+         Configured to permit all requests (catalog is public/read-only) while
+         adding standard security headers: X-Content-Type-Options, X-Frame-Options,
+         X-XSS-Protection, Referrer-Policy, Cache-Control, Pragma, Expires. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-security</artifactId>
+    </dependency>
+
     <!-- ======== -->
     <!-- Database -->
     <!-- ======== -->
@@ -110,6 +119,13 @@
       <plugin>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+          </execution>
+        </executions>
       </plugin>
     </plugins>
   </build>
