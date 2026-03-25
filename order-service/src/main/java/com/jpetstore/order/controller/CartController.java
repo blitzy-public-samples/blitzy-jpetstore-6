@@ -16,11 +16,13 @@
 package com.jpetstore.order.controller;
 
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -29,8 +31,12 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import org.springframework.validation.annotation.Validated;
+
+import jakarta.validation.ConstraintViolationException;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 
 import com.jpetstore.order.dto.CartDTO;
 import com.jpetstore.order.service.CartStateService;
@@ -86,6 +92,7 @@ import com.jpetstore.order.service.CartStateService;
  */
 @RestController
 @RequestMapping("/api/cart")
+@Validated
 public class CartController {
 
     private static final Logger log = LoggerFactory.getLogger(CartController.class);
@@ -103,6 +110,33 @@ public class CartController {
      */
     public CartController(CartStateService cartStateService) {
         this.cartStateService = cartStateService;
+    }
+
+    // -----------------------------------------------------------------------
+    // Exception Handling
+    // -----------------------------------------------------------------------
+
+    /**
+     * Handles {@link ConstraintViolationException} thrown when {@code @Pattern}
+     * validation on path variables fails.
+     *
+     * <p>Without this handler, Spring's {@code @Validated} AOP proxy throws a
+     * {@code ConstraintViolationException} that propagates as a raw
+     * {@code ServletException} (HTTP 500) instead of a proper 400 Bad Request.
+     * This handler converts it to a structured 400 response containing all
+     * violation messages.</p>
+     *
+     * @param ex the constraint violation exception containing one or more
+     *           validation failures
+     * @return {@code 400 Bad Request} with violation details as a JSON string
+     */
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<String> handleConstraintViolation(ConstraintViolationException ex) {
+        String violations = ex.getConstraintViolations().stream()
+                .map(v -> v.getPropertyPath() + ": " + v.getMessage())
+                .collect(Collectors.joining("; "));
+        log.warn("Constraint violation on cart request: {}", violations);
+        return ResponseEntity.badRequest().body(violations);
     }
 
     // -----------------------------------------------------------------------
@@ -125,7 +159,9 @@ public class CartController {
      * @return {@code 200 OK} with the cart state as a {@link CartDTO}
      */
     @GetMapping("/{sessionId}")
-    public ResponseEntity<CartDTO> getCart(@PathVariable String sessionId) {
+    public ResponseEntity<CartDTO> getCart(
+            @PathVariable @Pattern(regexp = "^[a-zA-Z0-9\\-]{1,128}$",
+                    message = "sessionId must be 1-128 alphanumeric or hyphen characters") String sessionId) {
         log.info("Getting cart for session: {}", sessionId);
         CartDTO cart = cartStateService.getCart(sessionId);
         return ResponseEntity.ok(cart);
@@ -151,8 +187,10 @@ public class CartController {
      * @return {@code 200 OK} with the updated cart state as a {@link CartDTO}
      */
     @PostMapping("/{sessionId}/items")
-    public ResponseEntity<CartDTO> addItemToCart(@PathVariable String sessionId,
-                                                 @Valid @RequestBody AddItemRequest request) {
+    public ResponseEntity<CartDTO> addItemToCart(
+            @PathVariable @Pattern(regexp = "^[a-zA-Z0-9\\-]{1,128}$",
+                    message = "sessionId must be 1-128 alphanumeric or hyphen characters") String sessionId,
+            @Valid @RequestBody AddItemRequest request) {
         log.info("Adding item {} to cart {}", request.getItemId(), sessionId);
         CartDTO cart = cartStateService.addItem(sessionId, request.getItemId());
         return ResponseEntity.ok(cart);
@@ -172,8 +210,10 @@ public class CartController {
      * @return {@code 200 OK} with the updated cart state as a {@link CartDTO}
      */
     @DeleteMapping("/{sessionId}/items/{itemId}")
-    public ResponseEntity<CartDTO> removeItemFromCart(@PathVariable String sessionId,
-                                                      @PathVariable String itemId) {
+    public ResponseEntity<CartDTO> removeItemFromCart(
+            @PathVariable @Pattern(regexp = "^[a-zA-Z0-9\\-]{1,128}$",
+                    message = "sessionId must be 1-128 alphanumeric or hyphen characters") String sessionId,
+            @PathVariable String itemId) {
         log.info("Removing item {} from cart {}", itemId, sessionId);
         CartDTO cart = cartStateService.removeItemById(sessionId, itemId);
         return ResponseEntity.ok(cart);
@@ -198,8 +238,10 @@ public class CartController {
      * @return {@code 200 OK} with the updated cart state as a {@link CartDTO}
      */
     @PutMapping("/{sessionId}")
-    public ResponseEntity<CartDTO> updateCartQuantities(@PathVariable String sessionId,
-                                                         @RequestBody Map<String, Integer> quantityUpdates) {
+    public ResponseEntity<CartDTO> updateCartQuantities(
+            @PathVariable @Pattern(regexp = "^[a-zA-Z0-9\\-]{1,128}$",
+                    message = "sessionId must be 1-128 alphanumeric or hyphen characters") String sessionId,
+            @RequestBody Map<String, Integer> quantityUpdates) {
         log.info("Updating cart quantities for session: {}, items: {}",
                 sessionId, quantityUpdates.size());
         CartDTO cart = cartStateService.updateQuantities(sessionId, quantityUpdates);
@@ -220,7 +262,9 @@ public class CartController {
      * @return {@code 204 No Content} with an empty response body
      */
     @DeleteMapping("/{sessionId}")
-    public ResponseEntity<Void> clearCart(@PathVariable String sessionId) {
+    public ResponseEntity<Void> clearCart(
+            @PathVariable @Pattern(regexp = "^[a-zA-Z0-9\\-]{1,128}$",
+                    message = "sessionId must be 1-128 alphanumeric or hyphen characters") String sessionId) {
         log.info("Clearing cart for session: {}", sessionId);
         cartStateService.clearCart(sessionId);
         return ResponseEntity.noContent().build();

@@ -15,11 +15,15 @@
  */
 package org.mybatis.jpetstore.web.actions;
 
+import java.math.BigDecimal;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
 import javax.servlet.http.HttpSession;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import net.sourceforge.stripes.action.ForwardResolution;
 import net.sourceforge.stripes.action.Resolution;
@@ -27,6 +31,7 @@ import net.sourceforge.stripes.action.SessionScope;
 
 import org.mybatis.jpetstore.domain.Account;
 import org.mybatis.jpetstore.domain.Cart;
+import org.mybatis.jpetstore.domain.Item;
 import org.mybatis.jpetstore.domain.Order;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -67,10 +72,23 @@ public class OrderActionBean extends AbstractActionBean {
   /** Transient REST client — recreated lazily after session deserialization. */
   private transient RestTemplate restTemplate;
 
-  /** Base URL for Order Service REST API (order CRUD and cart state). */
+  /**
+   * Base URL for Order Service REST API (order CRUD and cart state).
+   *
+   * <p><strong>Known technical debt:</strong> Service URLs are hardcoded because Stripes
+   * ActionBeans do not participate in Spring dependency injection. These constants should
+   * be externalized to a configuration source (e.g., JNDI, system properties, or a
+   * properties file read at startup) during post-transition cleanup when ActionBeans are
+   * retired.</p>
+   */
   private static final String ORDER_SERVICE_URL = "http://order-service:8083/api";
 
-  /** Base URL for externalized cart state managed by Order Service REST API. */
+  /**
+   * Base URL for externalized cart state managed by Order Service REST API.
+   *
+   * <p><strong>Known technical debt:</strong> Hardcoded for the same reason as
+   * {@link #ORDER_SERVICE_URL}. See that field's documentation for context.</p>
+   */
   private static final String CART_SERVICE_URL = "http://order-service:8083/api/cart";
 
   private Order order = new Order();
@@ -154,7 +172,7 @@ public class OrderActionBean extends AbstractActionBean {
     }
     try {
       Order[] orders = getRestTemplate().getForObject(
-          ORDER_SERVICE_URL + "/orders?username=" + username, Order[].class);
+          ORDER_SERVICE_URL + "/orders?username={username}", Order[].class, username);
       orderList = orders != null ? Arrays.asList(orders) : Collections.emptyList();
     } catch (Exception e) {
       LOG.warn("Failed to retrieve orders for user {}: {}", username, e.getMessage());
@@ -188,11 +206,37 @@ public class OrderActionBean extends AbstractActionBean {
 
     Account account = accountBean.getAccount();
 
-    // Retrieve cart from externalized state via REST
+    // Retrieve cart from externalized state via REST.
+    // CartController returns CartDTO JSON (fields: id, items, subTotal, numberOfItems) which
+    // cannot be directly deserialized into the monolith Cart class (synchronized HashMap, no
+    // matching setters). Instead, we fetch as raw JSON and reconstruct a Cart instance by
+    // iterating the items array and calling Cart.addItem() + Cart.setQuantityByItemId().
     Cart cart = null;
     try {
-      cart = getRestTemplate().getForObject(
-          CART_SERVICE_URL + "/" + session.getId(), Cart.class);
+      String cartJson = getRestTemplate().getForObject(
+          CART_SERVICE_URL + "/" + session.getId(), String.class);
+      if (cartJson != null) {
+        ObjectMapper mapper = new ObjectMapper();
+        JsonNode root = mapper.readTree(cartJson);
+        JsonNode items = root.get("items");
+        if (items != null && items.isArray() && items.size() > 0) {
+          cart = new Cart();
+          for (JsonNode itemNode : items) {
+            Item item = new Item();
+            item.setItemId(itemNode.get("itemId").asText());
+            // Map unitPrice from CartItemDTO to listPrice on Item (used by Order.initOrder)
+            if (itemNode.has("unitPrice") && !itemNode.get("unitPrice").isNull()) {
+              item.setListPrice(new BigDecimal(itemNode.get("unitPrice").asText()));
+            }
+            boolean inStock = itemNode.has("inStock") && itemNode.get("inStock").asBoolean();
+            cart.addItem(item, inStock);
+            int quantity = itemNode.has("quantity") ? itemNode.get("quantity").asInt(1) : 1;
+            if (quantity != 1) {
+              cart.setQuantityByItemId(item.getItemId(), quantity);
+            }
+          }
+        }
+      }
     } catch (Exception e) {
       LOG.warn("Failed to retrieve cart from externalized state, falling back to session: {}", e.getMessage());
     }
@@ -292,6 +336,10 @@ public class OrderActionBean extends AbstractActionBean {
     } catch (Exception e) {
       LOG.warn("Failed to retrieve order {}: {}", order.getOrderId(), e.getMessage());
       setMessage("Unable to retrieve order details.");
+      return new ForwardResolution(ERROR);
+    }
+    if (order == null) {
+      setMessage("Order not found.");
       return new ForwardResolution(ERROR);
     }
     if (username.equals(order.getUsername())) {

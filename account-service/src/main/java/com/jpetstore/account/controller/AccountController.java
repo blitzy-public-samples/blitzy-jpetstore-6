@@ -35,6 +35,7 @@ import com.jpetstore.account.dto.AccountDTO;
 import com.jpetstore.account.dto.SignonRequest;
 import com.jpetstore.account.dto.SignonResponse;
 import com.jpetstore.account.security.JwtTokenProvider;
+import com.jpetstore.account.security.LoginAttemptService;
 import com.jpetstore.account.service.AccountService;
 
 /**
@@ -92,16 +93,20 @@ public class AccountController {
 
     private final AccountService accountService;
     private final JwtTokenProvider jwtTokenProvider;
+    private final LoginAttemptService loginAttemptService;
 
     /**
      * Constructs the AccountController with required dependencies.
      *
-     * @param accountService   the account business logic service
-     * @param jwtTokenProvider the JWT token generation and validation provider
+     * @param accountService     the account business logic service
+     * @param jwtTokenProvider   the JWT token generation and validation provider
+     * @param loginAttemptService the brute-force login attempt tracking service
      */
-    public AccountController(AccountService accountService, JwtTokenProvider jwtTokenProvider) {
+    public AccountController(AccountService accountService, JwtTokenProvider jwtTokenProvider,
+                             LoginAttemptService loginAttemptService) {
         this.accountService = accountService;
         this.jwtTokenProvider = jwtTokenProvider;
+        this.loginAttemptService = loginAttemptService;
     }
 
     /**
@@ -126,14 +131,29 @@ public class AccountController {
     public ResponseEntity<?> signon(@Valid @RequestBody SignonRequest request) {
         log.debug("Signon attempt for username: {}", request.getUsername());
 
+        // Brute-force protection: reject requests for temporarily locked-out accounts
+        if (loginAttemptService.isBlocked(request.getUsername())) {
+            long remainingSeconds = loginAttemptService.getRemainingLockoutSeconds(request.getUsername());
+            log.warn("Signon blocked for username {} — account temporarily locked ({} seconds remaining)",
+                    request.getUsername(), remainingSeconds);
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .body("Account temporarily locked due to too many failed attempts. "
+                            + "Please try again in " + remainingSeconds + " seconds.");
+        }
+
         Optional<AccountDTO> accountOpt = accountService.getAccountForAuth(
                 request.getUsername(), request.getPassword());
 
         if (accountOpt.isEmpty()) {
+            // Record the failed attempt for lockout tracking
+            loginAttemptService.recordFailedAttempt(request.getUsername());
             log.info("Authentication failed for username: {}", request.getUsername());
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body("Invalid username or password.  Signon failed.");
         }
+
+        // Reset failure counter on successful authentication
+        loginAttemptService.resetAttempts(request.getUsername());
 
         AccountDTO account = accountOpt.get();
         String token = jwtTokenProvider.generateToken(account.getUsername());

@@ -15,7 +15,9 @@
  */
 package org.mybatis.jpetstore.web.actions;
 
+import java.util.HashMap;
 import java.util.Iterator;
+import java.util.Map;
 
 import javax.servlet.http.HttpServletRequest;
 
@@ -52,10 +54,23 @@ public class CartActionBean extends AbstractActionBean {
 
   private static final Logger LOG = LoggerFactory.getLogger(CartActionBean.class);
 
-  /** Base URL for Catalog Service REST API (item lookups and inventory checks). */
+  /**
+   * Base URL for Catalog Service REST API (item lookups and inventory checks).
+   *
+   * <p><strong>Known technical debt:</strong> Service URLs are hardcoded because Stripes
+   * ActionBeans do not participate in Spring dependency injection. These constants should
+   * be externalized to a configuration source (e.g., JNDI, system properties, or a
+   * properties file read at startup) during post-transition cleanup when ActionBeans are
+   * retired.</p>
+   */
   private static final String CATALOG_SERVICE_URL = "http://catalog-service:8082/api";
 
-  /** Base URL for externalized cart state managed by Order Service REST API. */
+  /**
+   * Base URL for externalized cart state managed by Order Service REST API.
+   *
+   * <p><strong>Known technical debt:</strong> Hardcoded for the same reason as
+   * {@link #CATALOG_SERVICE_URL}. See that field's documentation for context.</p>
+   */
   private static final String CART_SERVICE_URL = "http://order-service:8083/api/cart";
 
   /**
@@ -231,7 +246,12 @@ public class CartActionBean extends AbstractActionBean {
   private void syncCartToExternalStore() {
     try {
       String sessionId = context.getRequest().getSession().getId();
-      getRestTemplate().put(CART_SERVICE_URL + "/" + sessionId, cart);
+      // Build Map<itemId, quantity> matching CartController.updateCartQuantities() contract
+      Map<String, Integer> quantityMap = new HashMap<>();
+      for (CartItem ci : cart.getCartItemList()) {
+        quantityMap.put(ci.getItem().getItemId(), ci.getQuantity());
+      }
+      getRestTemplate().put(CART_SERVICE_URL + "/" + sessionId, quantityMap);
     } catch (Exception e) {
       LOG.warn("Failed to sync cart to external store: {}", e.getMessage());
     }

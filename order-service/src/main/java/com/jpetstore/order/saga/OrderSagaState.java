@@ -106,7 +106,7 @@ import jakarta.persistence.Table;
  * recovery and compensation in the distributed saga.</p>
  *
  * @see OrderSagaStep
- * @see com.jpetstore.order.service.OrderSagaOrchestrator
+ * @see com.jpetstore.order.saga.OrderSagaOrchestrator
  */
 @Entity
 @Table(name = "order_saga_state")

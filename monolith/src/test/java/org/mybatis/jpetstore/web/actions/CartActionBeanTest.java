@@ -27,6 +27,7 @@ import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.Map;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpSession;
@@ -326,7 +327,9 @@ class CartActionBeanTest {
             cartActionBean.addItemToCart();
 
             // Verify externalized cart sync was called via PUT to Order Service
-            verify(restTemplate).put(eq(CART_SERVICE_URL + "/test-session-id"), any(Cart.class));
+            // After fix for finding #9, sync now sends Map<String, Integer> (itemId→qty)
+            // instead of the raw Cart object, matching CartController's expected input format
+            verify(restTemplate).put(eq(CART_SERVICE_URL + "/test-session-id"), any(Map.class));
         }
 
         @Test
@@ -341,7 +344,8 @@ class CartActionBeanTest {
             cartActionBean.removeItemFromCart();
 
             // Verify externalized cart sync was called via PUT to Order Service
-            verify(restTemplate).put(eq(CART_SERVICE_URL + "/test-session-id"), any(Cart.class));
+            // After fix for finding #9, sync now sends Map<String, Integer> (itemId→qty)
+            verify(restTemplate).put(eq(CART_SERVICE_URL + "/test-session-id"), any(Map.class));
         }
 
         @Test
@@ -359,8 +363,9 @@ class CartActionBeanTest {
                 .thenReturn(item);
 
             // Cart sync fails — should NOT propagate error (fire-and-forget)
+            // After fix for finding #9, sync sends Map<String, Integer> instead of Cart
             doThrow(new RestClientException("Redis unavailable"))
-                .when(restTemplate).put(anyString(), any(Cart.class));
+                .when(restTemplate).put(anyString(), any(Map.class));
 
             Resolution resolution = cartActionBean.addItemToCart();
 

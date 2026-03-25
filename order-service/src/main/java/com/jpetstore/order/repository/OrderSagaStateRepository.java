@@ -76,7 +76,7 @@ import com.jpetstore.order.saga.OrderSagaState;
  * </ul>
  *
  * @see OrderSagaState
- * @see com.jpetstore.order.service.OrderSagaOrchestrator
+ * @see com.jpetstore.order.saga.OrderSagaOrchestrator
  * @see com.jpetstore.order.saga.InventoryCompensation
  */
 @Repository

@@ -25,7 +25,7 @@ package com.jpetstore.order.saga;
  * and must not be renamed without a corresponding database migration.</p>
  *
  * @see com.jpetstore.order.saga.OrderSagaState
- * @see com.jpetstore.order.service.OrderSagaOrchestrator
+ * @see com.jpetstore.order.saga.OrderSagaOrchestrator
  */
 public enum OrderSagaStep {
 

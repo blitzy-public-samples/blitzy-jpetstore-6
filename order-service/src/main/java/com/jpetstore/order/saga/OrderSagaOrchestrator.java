@@ -13,7 +13,7 @@
  *    See the License for the specific language governing permissions and
  *    limitations under the License.
  */
-package com.jpetstore.order.service;
+package com.jpetstore.order.saga;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -22,7 +22,8 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.jpetstore.order.client.CatalogServiceClient;
 import com.jpetstore.order.entity.LineItem;
@@ -32,9 +33,6 @@ import com.jpetstore.order.repository.LineItemRepository;
 import com.jpetstore.order.repository.OrderRepository;
 import com.jpetstore.order.repository.OrderSagaStateRepository;
 import com.jpetstore.order.repository.OrderStatusRepository;
-import com.jpetstore.order.saga.InventoryCompensation;
-import com.jpetstore.order.saga.OrderSagaState;
-import com.jpetstore.order.saga.OrderSagaStep;
 
 /**
  * Saga orchestrator for the distributed order transaction.
@@ -113,6 +111,7 @@ public class OrderSagaOrchestrator {
     private final CatalogServiceClient catalogServiceClient;
     private final InventoryCompensation inventoryCompensation;
     private final OrderSagaStateRepository sagaStateRepository;
+    private final TransactionTemplate transactionTemplate;
 
     /**
      * Constructs the saga orchestrator with all required dependencies injected
@@ -133,6 +132,11 @@ public class OrderSagaOrchestrator {
      * @param sagaStateRepository   Spring Data JPA repository for OrderSagaState
      *                              entities; used at each step to persist saga state
      *                              for crash recovery
+     * @param transactionManager    Spring's platform transaction manager; used to
+     *                              create programmatic transaction boundaries that
+     *                              commit independently per saga step, ensuring the
+     *                              PENDING order record is durable before cross-service
+     *                              REST calls begin (per AAP §0.7.1)
      */
     public OrderSagaOrchestrator(
             OrderRepository orderRepository,
@@ -140,13 +144,15 @@ public class OrderSagaOrchestrator {
             LineItemRepository lineItemRepository,
             CatalogServiceClient catalogServiceClient,
             InventoryCompensation inventoryCompensation,
-            OrderSagaStateRepository sagaStateRepository) {
+            OrderSagaStateRepository sagaStateRepository,
+            PlatformTransactionManager transactionManager) {
         this.orderRepository = orderRepository;
         this.orderStatusRepository = orderStatusRepository;
         this.lineItemRepository = lineItemRepository;
         this.catalogServiceClient = catalogServiceClient;
         this.inventoryCompensation = inventoryCompensation;
         this.sagaStateRepository = sagaStateRepository;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
     /**
@@ -158,25 +164,45 @@ public class OrderSagaOrchestrator {
      * {@code "CONFIRMED"}, on failure with status {@code "FAILED"}. The caller
      * should inspect {@link Order#getStatus()} to determine the outcome.</p>
      *
-     * <p>The {@code @Transactional} annotation ensures that all local database
-     * writes (Steps 1 and 3) execute within a single database transaction. The
-     * cross-service REST calls in Step 2 operate outside the database transaction
-     * boundary — they are HTTP calls, not database operations.</p>
+     * <p>This method is intentionally <strong>NOT</strong> annotated with
+     * {@code @Transactional}. Each saga step executes in its own independent
+     * transaction boundary via {@link TransactionTemplate}, ensuring that:</p>
+     * <ul>
+     *   <li><strong>Step 1 commits independently</strong> — the PENDING order record
+     *       becomes durable <em>before</em> any cross-service REST call begins. This
+     *       guarantees that a JVM crash during Step 2 leaves a recoverable PENDING
+     *       order in the database (per AAP §0.7.1: "The order record is written first
+     *       so that there is always a durable record of the attempt").</li>
+     *   <li><strong>Step 2 executes outside any database transaction</strong> — REST
+     *       calls to the Catalog Service are HTTP calls, not database operations. No
+     *       database connection is held open during network I/O, preventing connection
+     *       pool exhaustion under load.</li>
+     *   <li><strong>Step 3 commits independently</strong> — the CONFIRMED status update
+     *       is a separate, short-lived transaction.</li>
+     * </ul>
+     *
+     * <p>The reconciliation job described in AAP §0.7.1 can discover stalled sagas
+     * because the PENDING record is committed and visible in Step 1's transaction.</p>
      *
      * @param order the Order entity to process; must have lineItems populated
      *              but orderId will be auto-generated by the PostgreSQL sequence
      * @return the processed Order with status {@code "CONFIRMED"} on success or
      *         {@code "FAILED"} on inventory reservation failure
      */
-    @Transactional
     public Order executeOrderSaga(Order order) {
         log.info("Starting order saga for user: {}, current order status: {}",
                 order.getUsername(), order.getStatus());
 
-        // === STEP 1: CREATE_ORDER (local database write) ===
-        Order savedOrder = executeStepCreateOrder(order);
+        // === STEP 1: CREATE_ORDER (local database write — commits independently) ===
+        // Uses TransactionTemplate to ensure the PENDING order record is durable
+        // before any cross-service REST calls begin. A JVM crash after this point
+        // leaves a recoverable PENDING order that the reconciliation job can process.
+        Order savedOrder = transactionTemplate.execute(status ->
+                executeStepCreateOrder(order));
 
-        // === STEP 2: RESERVE_INVENTORY (cross-service REST calls to Catalog Service) ===
+        // === STEP 2: RESERVE_INVENTORY (cross-service REST calls — no DB transaction) ===
+        // Runs outside any database transaction. REST calls to the Catalog Service
+        // are HTTP calls, not database operations.
         OrderSagaState sagaState = retrieveSagaState(savedOrder.getOrderId());
         boolean inventoryReserved = executeStepReserveInventory(savedOrder, sagaState);
 
@@ -185,8 +211,9 @@ public class OrderSagaOrchestrator {
             return savedOrder;
         }
 
-        // === STEP 3: CONFIRM_ORDER (local database update) ===
-        return executeStepConfirmOrder(savedOrder, sagaState);
+        // === STEP 3: CONFIRM_ORDER (local database update — commits independently) ===
+        return transactionTemplate.execute(status ->
+                executeStepConfirmOrder(savedOrder, sagaState));
     }
 
     // -----------------------------------------------------------------------
@@ -280,10 +307,13 @@ public class OrderSagaOrchestrator {
         int orderId = savedOrder.getOrderId();
         log.info("Saga Step 2 [RESERVE_INVENTORY]: Reserving inventory for order {}", orderId);
 
-        // Update saga state to RESERVE_INVENTORY step
+        // Update saga state to RESERVE_INVENTORY step in its own transaction,
+        // so the progress is durable before cross-service REST calls begin
         if (sagaState != null) {
-            sagaState.setCurrentStep(OrderSagaStep.RESERVE_INVENTORY);
-            sagaStateRepository.save(sagaState);
+            transactionTemplate.executeWithoutResult(status -> {
+                sagaState.setCurrentStep(OrderSagaStep.RESERVE_INVENTORY);
+                sagaStateRepository.save(sagaState);
+            });
         }
 
         // Track successfully decremented items for potential compensation
@@ -336,10 +366,12 @@ public class OrderSagaOrchestrator {
             return false;
         }
 
-        // All inventory successfully reserved — update saga state
+        // All inventory successfully reserved — update saga state in its own transaction
         if (sagaState != null) {
-            sagaState.setStatus(OrderSagaState.STATUS_INVENTORY_RESERVED);
-            sagaStateRepository.save(sagaState);
+            transactionTemplate.executeWithoutResult(status -> {
+                sagaState.setStatus(OrderSagaState.STATUS_INVENTORY_RESERVED);
+                sagaStateRepository.save(sagaState);
+            });
         }
 
         log.info("Saga Step 2 [RESERVE_INVENTORY] complete: All {} items reserved for order {}",
@@ -409,10 +441,14 @@ public class OrderSagaOrchestrator {
         int orderId = savedOrder.getOrderId();
         log.warn("Saga COMPENSATION triggered for order {}: {}", orderId, failureReason);
 
-        // Transition saga state to COMPENSATING to indicate compensation in progress
+        // Transition saga state to COMPENSATING in its own transaction, so the
+        // compensation-in-progress state is durable before REST-based inventory
+        // restoration calls begin
         if (sagaState != null) {
-            sagaState.setStatus(OrderSagaState.STATUS_COMPENSATING);
-            sagaStateRepository.save(sagaState);
+            transactionTemplate.executeWithoutResult(status -> {
+                sagaState.setStatus(OrderSagaState.STATUS_COMPENSATING);
+                sagaStateRepository.save(sagaState);
+            });
         }
 
         // Compensate already-decremented items by restoring inventory via REST calls
@@ -444,16 +480,22 @@ public class OrderSagaOrchestrator {
             log.info("No compensation needed: No inventory was decremented for order {}", orderId);
         }
 
-        // Mark the order as FAILED — this persists within the current transaction
-        savedOrder.setStatus("FAILED");
-        orderRepository.save(savedOrder);
+        // Mark the order as FAILED and transition saga state to terminal FAILED state.
+        // Uses TransactionTemplate to commit independently, ensuring the FAILED status
+        // is durable even if subsequent processing encounters errors.
+        transactionTemplate.executeWithoutResult(status -> {
+            savedOrder.setStatus("FAILED");
+            orderRepository.save(savedOrder);
 
-        // Transition saga state to terminal FAILED state
-        if (sagaState != null) {
-            sagaState.setCurrentStep(OrderSagaStep.CONFIRM_ORDER);
-            sagaState.setStatus(OrderSagaState.STATUS_FAILED);
-            sagaStateRepository.save(sagaState);
-        }
+            // Transition saga state to terminal FAILED state.
+            // currentStep remains RESERVE_INVENTORY (the step where failure occurred)
+            // to accurately reflect the saga's progress for debugging and reconciliation.
+            if (sagaState != null) {
+                sagaState.setCurrentStep(OrderSagaStep.RESERVE_INVENTORY);
+                sagaState.setStatus(OrderSagaState.STATUS_FAILED);
+                sagaStateRepository.save(sagaState);
+            }
+        });
 
         log.warn("Saga FAILED: Order {} marked as FAILED. Reason: {}. "
                         + "Saga state: {}",
