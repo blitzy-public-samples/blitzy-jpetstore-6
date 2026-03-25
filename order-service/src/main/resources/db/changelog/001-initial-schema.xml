@@ -16,7 +16,7 @@
 
     Column naming:
       - ALL column names converted to snake_case for PostgreSQL conventions
-      - orders.userid renamed to orders.username to match the domain model
+      - orders.userid retains the original HSQLDB column name for migration consistency
 
     HSQLDB -> PostgreSQL type mappings:
       - int            -> integer
@@ -27,7 +27,7 @@
     Cross-service foreign key removal (AAP Section 0.8.1):
       - lineitem.item_id has NO FK to Catalog Service's item table
         (enforced at the application layer via REST API calls)
-      - orders.username has NO FK to Account Service's account table
+      - orders.userid has NO FK to Account Service's account table
         (enforced at the application layer via REST API calls)
 
     Sequence replacement (AAP Section 0.7.3):
@@ -36,7 +36,7 @@
       - Thread-safe, database-guaranteed atomic increment
 
     New column (AAP Section 0.7.1):
-      - orders.status varchar(2) NULLABLE for Saga state machine:
+      - orders.status varchar(20) NULLABLE for Saga state machine:
         PENDING -> CONFIRMED / FAILED
 -->
 <databaseChangeLog
@@ -81,7 +81,7 @@
 
          Column mapping (HSQLDB -> PostgreSQL):
            orderid          -> order_id          (PK, default from order_id_seq)
-           userid           -> username           (RENAMED to match domain model)
+           userid           -> userid             (retains original HSQLDB name for migration consistency)
            orderdate        -> order_date         (date -> timestamp with time zone)
            shipaddr1        -> ship_addr1
            shipaddr2        -> ship_addr2
@@ -105,10 +105,10 @@
            exprdate         -> expr_date
            cardtype         -> card_type
            locale           -> locale             (already snake_case)
-           (NEW)            -> status             (Saga state: PE/CO/FA)
+           (NEW)            -> status             (Saga state: PENDING/CONFIRMED/FAILED)
 
          Cross-service FK removal:
-           - orders.username: NO FK to Account Service's account table
+           - orders.userid: NO FK to Account Service's account table
              (was orders.userid -> account.userid in the monolith)
          ====================================================================== -->
     <changeSet id="001-create-orders" author="jpetstore-migration">
@@ -119,9 +119,9 @@
                 <constraints primaryKey="true" primaryKeyName="pk_orders" nullable="false"/>
             </column>
 
-            <!-- Renamed from HSQLDB 'userid' to 'username' to match domain model.
+            <!-- Retains original HSQLDB column name 'userid' for migration consistency.
                  NO FK to Account Service (cross-service FK removed per AAP 0.8.1) -->
-            <column name="username" type="varchar(80)">
+            <column name="userid" type="varchar(80)">
                 <constraints nullable="false"/>
             </column>
 
@@ -211,8 +211,8 @@
             <!-- NEW column for Saga orchestration state machine (AAP Section 0.7.1).
                  Not in original HSQLDB schema. NULLABLE for backward compatibility
                  during data migration.
-                 Values: PE (PENDING), CO (CONFIRMED), FA (FAILED) -->
-            <column name="status" type="varchar(2)"/>
+                 Values: PENDING, CONFIRMED, FAILED -->
+            <column name="status" type="varchar(20)"/>
         </createTable>
         <rollback>
             <dropTable tableName="orders"/>
@@ -229,7 +229,7 @@
            orderid   -> order_id   (int -> integer)
            linenum   -> line_num   (int -> integer)
            timestamp -> timestamp  (date -> timestamp with time zone)
-           status    -> status     (varchar(2), unchanged)
+           status    -> status     (varchar(2) -> varchar(20), widened for Saga state values)
 
          Note: The original HSQLDB schema does NOT define a FK from
          orderstatus.orderid to orders.orderid. We stay faithful to the
@@ -249,7 +249,7 @@
             <column name="timestamp" type="timestamp with time zone">
                 <constraints nullable="false"/>
             </column>
-            <column name="status" type="varchar(2)">
+            <column name="status" type="varchar(20)">
                 <constraints nullable="false"/>
             </column>
         </createTable>
@@ -308,6 +308,60 @@
                        constraintName="pk_lineitem"/>
         <rollback>
             <dropTable tableName="lineitem"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ======================================================================
+         Changeset 5: Create order_saga_state table
+         Source: NEW — not present in the monolith HSQLDB schema.
+         Purpose: Persists Saga orchestration state for distributed order
+                  transactions (AAP Section 0.7.1). Enables crash recovery,
+                  compensation tracking, and reconciliation of stalled Sagas.
+
+         Columns:
+           saga_id      varchar(36)  PK   — UUID v4 identifier for the Saga instance
+           order_id     integer      NN   — references orders.order_id (same DB, no FK)
+           current_step varchar(30)  NN   — enum: CREATE_ORDER, RESERVE_INVENTORY, CONFIRM_ORDER
+           status       varchar(20)  NN   — PENDING / INVENTORY_RESERVED / COMPLETED / COMPENSATING / FAILED
+           created_at   timestamp    NN   — Saga creation time (immutable after insert)
+           updated_at   timestamp    NN   — last state transition time (updated on every merge)
+         ====================================================================== -->
+    <changeSet id="001-create-order-saga-state" author="jpetstore-migration">
+        <comment>Create order_saga_state table for Saga orchestration crash recovery and compensation tracking</comment>
+        <createTable tableName="order_saga_state">
+            <!-- Primary key: UUID v4 stored as 36-char String -->
+            <column name="saga_id" type="varchar(36)">
+                <constraints primaryKey="true" primaryKeyName="pk_order_saga_state" nullable="false"/>
+            </column>
+
+            <!-- References orders.order_id within the same database.
+                 Not a formal FK — the Saga state is a separate concern from the order entity. -->
+            <column name="order_id" type="integer">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Current Saga step as enum name (String): CREATE_ORDER, RESERVE_INVENTORY, CONFIRM_ORDER -->
+            <column name="current_step" type="varchar(30)">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Saga status: PENDING, INVENTORY_RESERVED, COMPLETED, COMPENSATING, FAILED -->
+            <column name="status" type="varchar(20)">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Saga creation timestamp — immutable after insert -->
+            <column name="created_at" type="timestamp">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Last state transition timestamp — updated on every state change -->
+            <column name="updated_at" type="timestamp">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <rollback>
+            <dropTable tableName="order_saga_state"/>
         </rollback>
     </changeSet>
 

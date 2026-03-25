@@ -31,7 +31,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.jpetstore.catalog.entity.Inventory;
+import com.jpetstore.catalog.entity.InventoryReservation;
 import com.jpetstore.catalog.repository.InventoryRepository;
+import com.jpetstore.catalog.repository.InventoryReservationRepository;
 
 /**
  * Unit tests for {@link InventoryService}.
@@ -70,6 +72,9 @@ class InventoryServiceTest {
     @Mock
     private InventoryRepository inventoryRepository;
 
+    @Mock
+    private InventoryReservationRepository reservationRepository;
+
     @InjectMocks
     private InventoryService inventoryService;
 
@@ -92,13 +97,16 @@ class InventoryServiceTest {
         int quantity = 2;
         String orderId = "ORD-001";
 
-        // when
+        // when — no prior reservation exists (first attempt)
+        when(reservationRepository.findByOrderIdAndItemId(orderId, itemId))
+                .thenReturn(Optional.empty());
         when(inventoryRepository.decrementQuantity(itemId, quantity)).thenReturn(1);
         boolean result = inventoryService.decrementInventory(itemId, quantity, orderId);
 
         // then
         assertThat(result).isTrue();
         verify(inventoryRepository).decrementQuantity(itemId, quantity);
+        verify(reservationRepository).save(ArgumentMatchers.any(InventoryReservation.class));
     }
 
     /**
@@ -121,13 +129,16 @@ class InventoryServiceTest {
         int quantity = 100;
         String orderId = "ORD-002";
 
-        // when
+        // when — no prior reservation exists
+        when(reservationRepository.findByOrderIdAndItemId(orderId, itemId))
+                .thenReturn(Optional.empty());
         when(inventoryRepository.decrementQuantity(itemId, quantity)).thenReturn(0);
         boolean result = inventoryService.decrementInventory(itemId, quantity, orderId);
 
         // then
         assertThat(result).isFalse();
         verify(inventoryRepository).decrementQuantity(itemId, quantity);
+        verify(reservationRepository, never()).save(ArgumentMatchers.any(InventoryReservation.class));
     }
 
     /**
@@ -151,14 +162,18 @@ class InventoryServiceTest {
         Inventory inventory = new Inventory();
         inventory.setItemId(itemId);
         inventory.setQty(5);
+        InventoryReservation reservation = new InventoryReservation(orderId, itemId, quantity);
 
         // when
         when(inventoryRepository.findById(itemId)).thenReturn(Optional.of(inventory));
+        when(reservationRepository.findByOrderIdAndItemId(orderId, itemId))
+                .thenReturn(Optional.of(reservation));
         inventoryService.restoreInventory(itemId, quantity, orderId);
 
         // then
         assertThat(inventory.getQty()).isEqualTo(7); // 5 + 2 = 7
         verify(inventoryRepository).save(inventory);
+        verify(reservationRepository).delete(reservation);
     }
 
     /**

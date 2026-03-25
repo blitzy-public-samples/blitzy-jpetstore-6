@@ -182,10 +182,12 @@ public class DualWriteConfig {
      * </table>
      *
      * <h3>Column Name Mapping</h3>
-     * <p>PostgreSQL columns use {@code snake_case} naming while HSQLDB uses the original
-     * short names from the monolith schema ({@code jpetstore-hsqldb-schema.sql}). This
-     * replicator automatically maps PostgreSQL column names to their HSQLDB equivalents
-     * before executing SQL. Columns with identical names are passed through unchanged.</p>
+     * <p>PostgreSQL columns retain the original HSQLDB column names (as defined in
+     * the Liquibase changelog {@code 001-initial-schema.xml}) rather than converting
+     * to {@code snake_case}. Column names are therefore <strong>identical</strong> in
+     * both databases (e.g. {@code userid}, {@code firstname}, {@code langpref}).
+     * The mapping infrastructure is preserved for future schema evolution scenarios
+     * but currently passes all column names through unchanged.</p>
      *
      * <h3>Conflict Detection</h3>
      * <p>Each write operation is tracked with a {@code last_modified_timestamp}. If the
@@ -221,57 +223,48 @@ public class DualWriteConfig {
         private final ConcurrentHashMap<String, Instant> lastModifiedTracker = new ConcurrentHashMap<>();
 
         /**
-         * Column name mapping: PostgreSQL (snake_case) → HSQLDB (original schema names).
-         * Only columns with <em>different</em> names between PostgreSQL and HSQLDB are
-         * included. Columns with identical names in both databases are passed through
-         * unchanged by {@link #mapToHsqldbColumns(String, Map)}.
+         * Column name mapping: PostgreSQL → HSQLDB.
+         *
+         * <p>In this project the PostgreSQL schema (defined in the Liquibase changelog
+         * {@code 001-initial-schema.xml}) <strong>retains the original HSQLDB column
+         * names</strong> (e.g. {@code userid}, {@code firstname}, {@code langpref})
+         * rather than converting them to snake_case. Therefore all per-table mapping
+         * entries are <strong>empty</strong> — every column name is identical in both
+         * databases and the {@link #mapToHsqldbColumns(String, Map)} pass-through
+         * behaviour handles them correctly without any transformation.</p>
+         *
+         * <p>The map itself is kept (with empty sub-maps) so that
+         * {@link #mapToHsqldbColumns(String, Map)} never returns {@code null} and so
+         * that future column renames (e.g. during a schema evolution) can be added here
+         * without modifying any other code.</p>
          */
         private static final Map<String, Map<String, String>> COLUMN_MAPPINGS;
 
         /**
-         * Primary key column names per HSQLDB table (using HSQLDB column names).
+         * Primary key column names per table (same name in both PostgreSQL and HSQLDB).
          * Used to build WHERE clauses for UPDATE operations and to construct
          * conflict detection keys.
          */
         private static final Map<String, String[]> TABLE_PRIMARY_KEYS;
 
         static {
-            // Account table: PostgreSQL snake_case → HSQLDB original names
-            // HSQLDB schema: userid, email, firstname, lastname, status, addr1, addr2,
-            //                city, state, zip, country, phone
-            Map<String, String> accountMapping = new HashMap<>();
-            accountMapping.put("user_id", "userid");
-            accountMapping.put("first_name", "firstname");
-            accountMapping.put("last_name", "lastname");
-            // email, status, addr1, addr2, city, state, zip, country, phone are identical
-
-            // Profile table: PostgreSQL snake_case → HSQLDB original names
-            // HSQLDB schema: userid, langpref, favcategory, mylistopt, banneropt
-            Map<String, String> profileMapping = new HashMap<>();
-            profileMapping.put("user_id", "userid");
-            profileMapping.put("lang_pref", "langpref");
-            profileMapping.put("favourite_category_id", "favcategory");
-            profileMapping.put("my_list_opt", "mylistopt");
-            profileMapping.put("banner_opt", "banneropt");
-
-            // Signon table: column names are identical in both databases
-            // HSQLDB schema: username, password
-            Map<String, String> signonMapping = new HashMap<>();
-
-            // Bannerdata table: PostgreSQL snake_case → HSQLDB original names
-            // HSQLDB schema: favcategory, bannername
-            Map<String, String> bannerdataMapping = new HashMap<>();
-            bannerdataMapping.put("favourite_category", "favcategory");
-            bannerdataMapping.put("banner_name", "bannername");
-
+            // All column names are identical between PostgreSQL (Liquibase) and HSQLDB.
+            // PostgreSQL Liquibase schema column names:
+            //   account:    userid, email, firstname, lastname, status, addr1, addr2,
+            //               city, state, zip, country, phone
+            //   profile:    userid, langpref, favcategory, mylistopt, banneropt
+            //   signon:     username, password
+            //   bannerdata: favcategory, bannername
+            //
+            // No transformation needed — empty maps allow pass-through in mapToHsqldbColumns().
             Map<String, Map<String, String>> mappings = new HashMap<>();
-            mappings.put("account", Collections.unmodifiableMap(accountMapping));
-            mappings.put("profile", Collections.unmodifiableMap(profileMapping));
-            mappings.put("signon", Collections.unmodifiableMap(signonMapping));
-            mappings.put("bannerdata", Collections.unmodifiableMap(bannerdataMapping));
+            mappings.put("account", Collections.emptyMap());
+            mappings.put("profile", Collections.emptyMap());
+            mappings.put("signon", Collections.emptyMap());
+            mappings.put("bannerdata", Collections.emptyMap());
             COLUMN_MAPPINGS = Collections.unmodifiableMap(mappings);
 
-            // Primary keys per table using HSQLDB column names
+            // Primary keys per table (identical in PostgreSQL and HSQLDB)
             Map<String, String[]> pks = new HashMap<>();
             pks.put("account", new String[]{"userid"});
             pks.put("profile", new String[]{"userid"});
@@ -309,13 +302,14 @@ public class DualWriteConfig {
          * <p>This is the generic entry point for dual-write replication. The method
          * attempts an INSERT into the HSQLDB table. If the row already exists (detected
          * via primary key existence check), it falls back to an UPDATE. Column names
-         * are automatically mapped from PostgreSQL snake_case to HSQLDB original names.</p>
+         * are passed through the mapping infrastructure (currently identity-mapped since
+         * PostgreSQL and HSQLDB share identical column names).</p>
          *
          * <p>Write direction: PostgreSQL (primary) → HSQLDB (secondary) — NEVER reversed.</p>
          *
          * @param table the target table name (must be one of: account, profile, signon, bannerdata)
-         * @param data  column name-value pairs using PostgreSQL snake_case naming;
-         *              automatically mapped to HSQLDB column names before execution
+         * @param data  column name-value pairs using the database column names (identical in
+         *              both PostgreSQL and HSQLDB, e.g. {@code userid}, {@code firstname})
          */
         public void replicateWrite(String table, Map<String, Object> data) {
             if (!validateTable(table)) {
@@ -360,14 +354,14 @@ public class DualWriteConfig {
          * Asynchronously replicates an INSERT operation to the secondary HSQLDB database.
          *
          * <p>Builds an INSERT SQL statement from the provided column data and executes it
-         * against the HSQLDB secondary database. Column names are automatically mapped
-         * from PostgreSQL snake_case to HSQLDB original naming conventions.</p>
+         * against the HSQLDB secondary database. Column names are passed through the
+         * mapping infrastructure (currently identity-mapped).</p>
          *
          * <p>If the row already exists in HSQLDB (duplicate primary key), the INSERT is
          * skipped with a warning log — this ensures idempotency for retry scenarios.</p>
          *
          * @param table the target table name (must be one of: account, profile, signon, bannerdata)
-         * @param data  column name-value pairs using PostgreSQL snake_case naming
+         * @param data  column name-value pairs using database column names
          */
         public void replicateInsert(String table, Map<String, Object> data) {
             if (!validateTable(table)) {
@@ -413,8 +407,8 @@ public class DualWriteConfig {
          * Asynchronously replicates an UPDATE operation to the secondary HSQLDB database.
          *
          * <p>Builds an UPDATE SQL statement from the provided column data, using the
-         * table's primary key columns for the WHERE clause. Column names are automatically
-         * mapped from PostgreSQL snake_case to HSQLDB original naming conventions.</p>
+         * table's primary key columns for the WHERE clause. Column names are passed
+         * through the mapping infrastructure (currently identity-mapped).</p>
          *
          * <p>Conflict detection: If the HSQLDB row was modified more recently than this
          * replication event (tracked via {@code last_modified_timestamp}), the update is
@@ -422,7 +416,7 @@ public class DualWriteConfig {
          * (AAP Section 0.7.5).</p>
          *
          * @param table the target table name (must be one of: account, profile, signon, bannerdata)
-         * @param data  column name-value pairs (including primary key columns) using PostgreSQL naming
+         * @param data  column name-value pairs (including primary key columns) using database column names
          */
         public void replicateUpdate(String table, Map<String, Object> data) {
             if (!validateTable(table)) {
@@ -463,9 +457,10 @@ public class DualWriteConfig {
         // =====================================================================
 
         /**
-         * Maps PostgreSQL snake_case column names to HSQLDB original column names
-         * for the specified table. Columns without a mapping entry are passed through
-         * unchanged (they share the same name in both databases).
+         * Maps PostgreSQL column names to HSQLDB column names for the specified table.
+         * Since both databases use identical column names (no snake_case conversion was
+         * applied during schema migration), all columns pass through unchanged.
+         * The mapping infrastructure is preserved for future schema evolution.
          */
         private Map<String, Object> mapToHsqldbColumns(String table, Map<String, Object> pgData) {
             Map<String, String> mapping = COLUMN_MAPPINGS.getOrDefault(table, Collections.emptyMap());

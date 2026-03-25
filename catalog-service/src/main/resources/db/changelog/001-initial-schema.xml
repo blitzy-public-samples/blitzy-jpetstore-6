@@ -203,4 +203,59 @@
         </rollback>
     </changeSet>
 
+    <!-- ======================================================================
+         Changeset 6: Create inventory_reservation table
+         Source: NEW — not present in the monolith HSQLDB schema.
+         Purpose: Provides idempotency for inventory decrement operations
+                  invoked by the Order Service's Saga orchestrator during
+                  order placement (AAP Section 0.7.1).
+
+         Every inventory reservation request includes the orderId as an
+         idempotency key. The UNIQUE constraint on (order_id, item_id)
+         guarantees that duplicate decrement requests for the same
+         (orderId, itemId) pair are safely deduplicated at the database level.
+
+         Columns:
+           id          BIGSERIAL    PK   — auto-generated surrogate key
+           order_id    varchar(36)  NN   — idempotency key from Order Service
+           item_id     varchar(10)  NN   — references inventory.itemid (no FK)
+           quantity    integer      NN   — quantity decremented
+           created_at  timestamp    NN   — reservation creation time
+         ====================================================================== -->
+    <changeSet id="001-create-inventory-reservation" author="jpetstore-migration">
+        <comment>Create inventory_reservation table for idempotent inventory decrement (AAP 0.7.1)</comment>
+        <createTable tableName="inventory_reservation">
+            <!-- Auto-generated surrogate primary key -->
+            <column name="id" type="bigserial">
+                <constraints primaryKey="true" primaryKeyName="pk_inventory_reservation" nullable="false"/>
+            </column>
+
+            <!-- Order ID as idempotency key — from Order Service's Saga orchestrator -->
+            <column name="order_id" type="varchar(36)">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Item ID whose inventory was decremented -->
+            <column name="item_id" type="varchar(10)">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Quantity decremented from inventory -->
+            <column name="quantity" type="integer">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Reservation creation timestamp -->
+            <column name="created_at" type="timestamp">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addUniqueConstraint tableName="inventory_reservation"
+                             columnNames="order_id, item_id"
+                             constraintName="uq_reservation_order_item"/>
+        <rollback>
+            <dropTable tableName="inventory_reservation"/>
+        </rollback>
+    </changeSet>
+
 </databaseChangeLog>

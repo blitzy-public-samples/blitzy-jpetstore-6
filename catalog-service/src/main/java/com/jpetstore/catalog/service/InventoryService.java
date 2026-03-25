@@ -18,7 +18,9 @@ package com.jpetstore.catalog.service;
 import java.util.Optional;
 
 import com.jpetstore.catalog.entity.Inventory;
+import com.jpetstore.catalog.entity.InventoryReservation;
 import com.jpetstore.catalog.repository.InventoryRepository;
+import com.jpetstore.catalog.repository.InventoryReservationRepository;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -83,16 +85,21 @@ public class InventoryService {
 
     private final InventoryRepository inventoryRepository;
 
+    private final InventoryReservationRepository reservationRepository;
+
     /**
-     * Constructs an {@code InventoryService} with the required repository dependency.
+     * Constructs an {@code InventoryService} with the required repository dependencies.
      *
      * <p>Uses constructor injection (no {@code @Autowired} annotation) consistent with
      * Spring's recommended injection pattern and the monolith's service class conventions.
      *
-     * @param inventoryRepository the Spring Data JPA repository for inventory operations
+     * @param inventoryRepository    the Spring Data JPA repository for inventory operations
+     * @param reservationRepository  the repository for inventory reservation deduplication records
      */
-    public InventoryService(InventoryRepository inventoryRepository) {
+    public InventoryService(InventoryRepository inventoryRepository,
+                            InventoryReservationRepository reservationRepository) {
         this.inventoryRepository = inventoryRepository;
+        this.reservationRepository = reservationRepository;
     }
 
     /**
@@ -108,23 +115,42 @@ public class InventoryService {
      * over the monolith: the {@code qty >= :decrement} guard in the repository query prevents
      * inventory from going negative, which the original MyBatis SQL did not enforce.
      *
-     * <p><strong>Idempotency:</strong> The {@code orderId} parameter serves as the idempotency
-     * key per AAP Section 0.7.1. For this POC implementation, the orderId is logged for
-     * traceability. A full production implementation would persist an idempotency record
-     * (e.g., a reservation table indexed by {@code orderId + itemId}) to detect and safely
-     * handle duplicate requests without double-decrementing.
+     * <p><strong>Idempotency (AAP Section 0.7.1):</strong> The {@code orderId} parameter
+     * serves as the idempotency key. Before decrementing, this method checks the
+     * {@code inventory_reservation} table for an existing reservation with the same
+     * (orderId, itemId) combination. If a reservation already exists, the decrement
+     * was previously applied and the method returns {@code true} immediately without
+     * modifying inventory — guaranteeing exactly-once semantics for each (orderId, itemId)
+     * pair even under Saga retries caused by network timeouts.
+     *
+     * <p>When a decrement succeeds, a new {@link InventoryReservation} record is persisted
+     * within the same transaction, creating a durable proof of the decrement. The
+     * UNIQUE constraint on (order_id, item_id) provides a database-level safety net
+     * against any application-level race conditions.
      *
      * @param itemId  the item identifier whose inventory should be decremented;
      *                must correspond to an existing inventory record
      * @param quantity the number of units to subtract from current stock; must be positive
      * @param orderId the order identifier acting as an idempotency key for Saga retry safety
-     * @return {@code true} if the decrement succeeded (sufficient stock was available),
+     * @return {@code true} if the decrement succeeded (or was already applied for this orderId),
      *         {@code false} if the item was not found or had insufficient stock
      */
     @Transactional
     public boolean decrementInventory(String itemId, int quantity, String orderId) {
         log.info("Decrementing inventory for item {} by {} for order {}", itemId, quantity, orderId);
 
+        // Idempotency check: if a reservation already exists for this (orderId, itemId),
+        // the decrement was already applied — return success without double-decrementing.
+        Optional<InventoryReservation> existingReservation =
+                reservationRepository.findByOrderIdAndItemId(orderId, itemId);
+        if (existingReservation.isPresent()) {
+            log.info("Idempotency guard: reservation already exists for order {} item {} (reservationId={}). "
+                    + "Returning success without re-decrementing.",
+                    orderId, itemId, existingReservation.get().getId());
+            return true;
+        }
+
+        // No existing reservation — perform the actual inventory decrement.
         int rowsAffected = inventoryRepository.decrementQuantity(itemId, quantity);
 
         if (rowsAffected == 0) {
@@ -132,7 +158,12 @@ public class InventoryService {
             return false;
         }
 
-        log.info("Successfully decremented inventory for item {} by {} for order {}", itemId, quantity, orderId);
+        // Persist the reservation record to guard against future retries.
+        InventoryReservation reservation = new InventoryReservation(orderId, itemId, quantity);
+        reservationRepository.save(reservation);
+
+        log.info("Successfully decremented inventory for item {} by {} for order {} (reservationId={})",
+                itemId, quantity, orderId, reservation.getId());
         return true;
     }
 
@@ -171,6 +202,15 @@ public class InventoryService {
             inventoryRepository.save(inventory);
             log.info("Successfully restored inventory for item {} (id={}) from {} to {} for order {}",
                     itemId, inventory.getItemId(), previousQty, inventory.getQty(), orderId);
+
+            // Remove the reservation record so that a future retry of the same order
+            // does not find a stale reservation and skip the decrement.
+            reservationRepository.findByOrderIdAndItemId(orderId, itemId)
+                    .ifPresent(reservation -> {
+                        reservationRepository.delete(reservation);
+                        log.info("Removed reservation record for order {} item {} during compensation",
+                                orderId, itemId);
+                    });
         } else {
             log.error("Cannot restore inventory for item {}: inventory record not found", itemId);
             throw new IllegalStateException("Inventory record not found for item: " + itemId);
