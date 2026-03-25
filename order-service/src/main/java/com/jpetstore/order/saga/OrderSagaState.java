@@ -17,15 +17,12 @@ package com.jpetstore.order.saga;
 
 import java.io.Serializable;
 import java.time.LocalDateTime;
-import java.util.Objects;
 import java.util.UUID;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
@@ -37,21 +34,23 @@ import jakarta.persistence.Table;
  *
  * <p>This entity is central to the Order Service's crash recovery mechanism.
  * When the Order Service restarts after a failure, it can query for Saga instances
- * in non-terminal states (PENDING, INVENTORY_RESERVED, COMPENSATING) and resume
- * or compensate them accordingly. Without this persistence, a crash between
- * the order write and the inventory reservation confirmation would leave the
- * system in an inconsistent state.</p>
+ * in non-terminal states ({@code PENDING}, {@code INVENTORY_RESERVED},
+ * {@code COMPENSATING}) and resume or compensate them accordingly. Without this
+ * persistence, a crash between the order write and the inventory reservation
+ * confirmation would leave the system in an inconsistent state.</p>
  *
- * <h3>Saga State Machine</h3>
+ * <h3>Saga State Machine (per AAP Section 0.7.1)</h3>
  * <p>The Saga progresses through the following states:</p>
  * <pre>{@code
  *   PENDING ──(inventory reserved)──> INVENTORY_RESERVED ──(confirmed)──> COMPLETED
  *      │                                       │
- *      │ (creation failed)                     │ (confirmation failed)
- *      v                                       v
- *   FAILED                              COMPENSATING ──(compensated)──> FAILED
+ *      │ (creation failed /                    │ (confirmation failed)
+ *      │  insufficient stock)                  v
+ *      v                                COMPENSATING ──(compensated)──> FAILED
+ *   FAILED
  * }</pre>
  *
+ * <h3>Status Values</h3>
  * <ul>
  *   <li>{@code PENDING} — Initial state after the order record is written locally
  *       (OrderSagaStep.CREATE_ORDER completed). The Saga is waiting to reserve
@@ -70,16 +69,41 @@ import jakarta.persistence.Table;
  *
  * <h3>Reconciliation Job</h3>
  * <p>A scheduled reconciliation job queries for Saga instances that have been
- * in {@code PENDING} or {@code INVENTORY_RESERVED} state beyond a configurable
- * timeout threshold (e.g., 60 seconds). These represent Sagas that may have
- * stalled due to service crashes or network partitions. The job either completes
- * or compensates them based on the current state of the external systems.</p>
+ * in a non-terminal state beyond a configurable timeout threshold (e.g., 60 seconds).
+ * The query pattern:</p>
+ * <pre>{@code
+ * SELECT * FROM order_saga_state
+ *   WHERE status NOT IN ('COMPLETED', 'FAILED')
+ *     AND created_at < NOW() - INTERVAL '60 seconds'
+ * }</pre>
+ * <p>These represent Sagas that may have stalled due to service crashes or network
+ * partitions. The job either completes or compensates them based on the current state
+ * of the external systems.</p>
+ *
+ * <h3>Key Invariants (from AAP Section 0.7.1)</h3>
+ * <ul>
+ *   <li>A confirmed order (status={@code COMPLETED}) always has a corresponding
+ *       inventory decrement.</li>
+ *   <li>A failed or rolled-back order (status={@code FAILED}) never decrements
+ *       inventory (or compensation has fully restored it).</li>
+ *   <li>The {@code PENDING} → {@code COMPLETED}/{@code FAILED} state machine is
+ *       the single source of truth for distributed transaction outcome.</li>
+ * </ul>
  *
  * <h3>Persistence Details</h3>
  * <p>This entity is stored in the Order Service's PostgreSQL database
- * ({@code jpetstore_order}). The table is created by Liquibase (or Hibernate
- * auto-DDL in development). The UUID primary key ensures global uniqueness
- * without sequence coordination.</p>
+ * ({@code jpetstore_order}) in the {@code order_saga_state} table. The table is
+ * created by Liquibase ({@code 001-initial-schema.xml}) alongside {@code orders},
+ * {@code orderstatus}, and {@code lineitem}. The UUID primary key ensures global
+ * uniqueness without sequence coordination.</p>
+ *
+ * <h3>Design Note — Why This Entity Exists</h3>
+ * <p>In the monolith, {@code OrderService.insertOrder()} runs as a single
+ * {@code @Transactional} ACID transaction. If the JVM crashes mid-transaction,
+ * the database automatically rolls back. After decomposition, the inventory
+ * decrement is a REST call to the Catalog Service — a different database and
+ * process. This entity provides the durable state tracking needed for crash
+ * recovery and compensation in the distributed saga.</p>
  *
  * @see OrderSagaStep
  * @see com.jpetstore.order.service.OrderSagaOrchestrator
@@ -91,21 +115,41 @@ public class OrderSagaState implements Serializable {
     private static final long serialVersionUID = 1L;
 
     // -----------------------------------------------------------------------
-    // Primary Key — UUID for global uniqueness
+    // Status Constants — valid values for the status field
+    // -----------------------------------------------------------------------
+
+    /** Initial state: order created locally, waiting for inventory reservation. */
+    public static final String STATUS_PENDING = "PENDING";
+
+    /** Inventory successfully reserved via Catalog Service, awaiting confirmation. */
+    public static final String STATUS_INVENTORY_RESERVED = "INVENTORY_RESERVED";
+
+    /** Terminal success: order confirmed, all inventory committed. */
+    public static final String STATUS_COMPLETED = "COMPLETED";
+
+    /** Active compensation in progress: restoring decremented inventory. */
+    public static final String STATUS_COMPENSATING = "COMPENSATING";
+
+    /** Terminal failure: order not placed, or compensation completed. */
+    public static final String STATUS_FAILED = "FAILED";
+
+    // -----------------------------------------------------------------------
+    // Primary Key — UUID (stored as String for simplicity and portability)
     // -----------------------------------------------------------------------
 
     /**
      * Unique identifier for this Saga instance.
      *
-     * <p>Uses UUID (v4, random) for globally unique identification without
-     * requiring a database sequence. This allows Saga IDs to be generated
-     * in application code before any database interaction, which is useful
-     * for logging and correlation from the very start of the Saga.</p>
+     * <p>Uses UUID v4 (random) stored as a 36-character String for globally
+     * unique identification without requiring a database sequence. Generated
+     * automatically in the {@link #onCreate()} lifecycle callback if not set
+     * by the service layer. This allows Saga IDs to be generated in application
+     * code before any database interaction, which is useful for logging and
+     * correlation from the very start of the Saga.</p>
      */
     @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
-    @Column(name = "saga_id", nullable = false, updatable = false)
-    private UUID sagaId;
+    @Column(name = "saga_id", nullable = false, updatable = false, length = 36)
+    private String sagaId;
 
     // -----------------------------------------------------------------------
     // Order Reference
@@ -117,6 +161,10 @@ public class OrderSagaState implements Serializable {
      * <p>References the {@code orders.order_id} column within the same database.
      * Each order has at most one active Saga. The Saga orchestrator uses this
      * field to correlate Saga state with the order record and its line items.</p>
+     *
+     * <p>NOT a JPA relationship ({@code @ManyToOne}) — the saga state is a
+     * separate concern from the order entity, though both reside in the same
+     * service/database.</p>
      */
     @Column(name = "order_id", nullable = false)
     private int orderId;
@@ -142,15 +190,22 @@ public class OrderSagaState implements Serializable {
     /**
      * The current status of the Saga state machine.
      *
-     * <p>Persisted as a String enum name. Terminal states: {@code COMPLETED},
-     * {@code FAILED}. Non-terminal states: {@code PENDING},
-     * {@code INVENTORY_RESERVED}, {@code COMPENSATING}.</p>
+     * <p>Stored as a plain String for flexibility and forward-compatibility.
+     * Valid values: {@code "PENDING"}, {@code "INVENTORY_RESERVED"},
+     * {@code "COMPLETED"}, {@code "COMPENSATING"}, {@code "FAILED"}.</p>
      *
-     * @see SagaStatus
+     * <p>Terminal states: {@code COMPLETED} and {@code FAILED}.<br>
+     * Non-terminal states: {@code PENDING}, {@code INVENTORY_RESERVED},
+     * {@code COMPENSATING}.</p>
+     *
+     * @see #STATUS_PENDING
+     * @see #STATUS_INVENTORY_RESERVED
+     * @see #STATUS_COMPLETED
+     * @see #STATUS_COMPENSATING
+     * @see #STATUS_FAILED
      */
-    @Enumerated(EnumType.STRING)
-    @Column(name = "status", nullable = false, length = 25)
-    private SagaStatus status;
+    @Column(name = "status", nullable = false, length = 20)
+    private String status;
 
     // -----------------------------------------------------------------------
     // Lifecycle Timestamps
@@ -161,7 +216,8 @@ public class OrderSagaState implements Serializable {
      *
      * <p>Set automatically by the {@link #onCreate()} lifecycle callback.
      * Used by the reconciliation job to identify stalled Sagas that have
-     * been in a non-terminal state beyond the configured timeout threshold.</p>
+     * been in a non-terminal state beyond the configured timeout threshold
+     * (e.g., 60 seconds per AAP Section 0.7.1).</p>
      */
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
@@ -170,9 +226,9 @@ public class OrderSagaState implements Serializable {
      * Timestamp of the most recent state transition.
      *
      * <p>Updated automatically by the {@link #onUpdate()} lifecycle callback
-     * on every persist or merge operation. Provides an audit trail and helps
-     * the reconciliation job distinguish between recently-active and truly-stalled
-     * Sagas.</p>
+     * on every merge operation, and also initialized during persist. Provides
+     * an audit trail and helps the reconciliation job distinguish between
+     * recently-active and truly-stalled Sagas.</p>
      */
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
@@ -182,18 +238,27 @@ public class OrderSagaState implements Serializable {
     // -----------------------------------------------------------------------
 
     /**
-     * Sets {@code createdAt} and {@code updatedAt} to the current time
-     * before the entity is first persisted.
+     * JPA lifecycle callback invoked before this entity is first persisted.
+     *
+     * <p>Generates a UUID for {@code sagaId} if it has not been set by the
+     * service layer, and initializes both {@code createdAt} and {@code updatedAt}
+     * timestamps to the current time.</p>
      */
     @PrePersist
     protected void onCreate() {
+        if (this.sagaId == null) {
+            this.sagaId = UUID.randomUUID().toString();
+        }
         LocalDateTime now = LocalDateTime.now();
         this.createdAt = now;
         this.updatedAt = now;
     }
 
     /**
-     * Updates {@code updatedAt} to the current time before the entity is merged.
+     * JPA lifecycle callback invoked before this entity is merged (updated).
+     *
+     * <p>Updates the {@code updatedAt} timestamp to the current time to track
+     * when the last state transition occurred.</p>
      */
     @PreUpdate
     protected void onUpdate() {
@@ -205,11 +270,27 @@ public class OrderSagaState implements Serializable {
     // -----------------------------------------------------------------------
 
     /**
-     * No-arg constructor required by the JPA specification for entity instantiation
-     * by the persistence provider.
+     * No-arg constructor required by the JPA specification for entity
+     * instantiation by the persistence provider.
      */
     public OrderSagaState() {
         // JPA requires a no-arg constructor
+    }
+
+    /**
+     * Convenience constructor for creating a new Saga state with the three
+     * essential fields. The {@code sagaId}, {@code createdAt}, and
+     * {@code updatedAt} fields will be auto-generated by the
+     * {@link #onCreate()} lifecycle callback during persist.
+     *
+     * @param orderId     the order ID that this Saga orchestrates
+     * @param currentStep the initial step in the Saga sequence
+     * @param status      the initial status (typically {@link #STATUS_PENDING})
+     */
+    public OrderSagaState(int orderId, OrderSagaStep currentStep, String status) {
+        this.orderId = orderId;
+        this.currentStep = currentStep;
+        this.status = status;
     }
 
     // -----------------------------------------------------------------------
@@ -219,18 +300,22 @@ public class OrderSagaState implements Serializable {
     /**
      * Returns the unique Saga identifier.
      *
-     * @return the saga ID as {@link UUID}
+     * @return the saga ID as a 36-character UUID string
      */
-    public UUID getSagaId() {
+    public String getSagaId() {
         return sagaId;
     }
 
     /**
      * Sets the unique Saga identifier.
      *
-     * @param sagaId the saga ID to set
+     * <p>Typically not called directly — the {@link #onCreate()} lifecycle
+     * callback generates a UUID automatically. Use this method only if a
+     * specific saga ID must be set (e.g., for idempotency or testing).</p>
+     *
+     * @param sagaId the saga ID to set (expected: 36-character UUID string)
      */
-    public void setSagaId(UUID sagaId) {
+    public void setSagaId(String sagaId) {
         this.sagaId = sagaId;
     }
 
@@ -273,18 +358,24 @@ public class OrderSagaState implements Serializable {
     /**
      * Returns the current Saga status.
      *
-     * @return the current {@link SagaStatus}
+     * @return the status string (one of {@link #STATUS_PENDING},
+     *         {@link #STATUS_INVENTORY_RESERVED}, {@link #STATUS_COMPLETED},
+     *         {@link #STATUS_COMPENSATING}, {@link #STATUS_FAILED})
      */
-    public SagaStatus getStatus() {
+    public String getStatus() {
         return status;
     }
 
     /**
      * Sets the current Saga status.
      *
-     * @param status the status to set
+     * <p>Valid values: {@code "PENDING"}, {@code "INVENTORY_RESERVED"},
+     * {@code "COMPLETED"}, {@code "COMPENSATING"}, {@code "FAILED"}.
+     * Use the {@code STATUS_*} constants defined on this class.</p>
+     *
+     * @param status the status string to set
      */
-    public void setStatus(SagaStatus status) {
+    public void setStatus(String status) {
         this.status = status;
     }
 
@@ -299,6 +390,9 @@ public class OrderSagaState implements Serializable {
 
     /**
      * Sets the creation timestamp.
+     *
+     * <p>Typically not called directly — the {@link #onCreate()} lifecycle
+     * callback sets this automatically on first persist.</p>
      *
      * @param createdAt the creation timestamp to set
      */
@@ -318,6 +412,9 @@ public class OrderSagaState implements Serializable {
     /**
      * Sets the last-updated timestamp.
      *
+     * <p>Typically not called directly — the {@link #onUpdate()} lifecycle
+     * callback sets this automatically on every merge.</p>
+     *
      * @param updatedAt the last-updated timestamp to set
      */
     public void setUpdatedAt(LocalDateTime updatedAt) {
@@ -325,93 +422,27 @@ public class OrderSagaState implements Serializable {
     }
 
     // -----------------------------------------------------------------------
-    // equals, hashCode, toString
+    // toString
     // -----------------------------------------------------------------------
 
     /**
-     * Two Saga states are equal if they have the same {@code sagaId}.
+     * Returns a string representation of this Saga state for operational
+     * logging and debugging.
      *
-     * @param o the object to compare with
-     * @return {@code true} if the objects represent the same Saga instance
-     */
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) {
-            return true;
-        }
-        if (o == null || getClass() != o.getClass()) {
-            return false;
-        }
-        OrderSagaState that = (OrderSagaState) o;
-        return Objects.equals(sagaId, that.sagaId);
-    }
-
-    /**
-     * Hash code based on {@code sagaId}.
-     *
-     * @return the hash code
-     */
-    @Override
-    public int hashCode() {
-        return Objects.hash(sagaId);
-    }
-
-    /**
-     * Returns a string representation of this Saga state for debugging and logging.
+     * <p>Includes all key fields to facilitate troubleshooting of stuck or
+     * failed sagas in production logs.</p>
      *
      * @return a string containing the Saga's key fields
      */
     @Override
     public String toString() {
         return "OrderSagaState{"
-                + "sagaId=" + sagaId
+                + "sagaId='" + sagaId + '\''
                 + ", orderId=" + orderId
                 + ", currentStep=" + currentStep
-                + ", status=" + status
+                + ", status='" + status + '\''
                 + ", createdAt=" + createdAt
                 + ", updatedAt=" + updatedAt
                 + '}';
-    }
-
-    // -----------------------------------------------------------------------
-    // Saga Status Enum (nested)
-    // -----------------------------------------------------------------------
-
-    /**
-     * Enumeration of all possible Saga status values.
-     *
-     * <p>Persisted as String via {@code @Enumerated(EnumType.STRING)}. The constant
-     * names must remain stable and must not be renamed without a corresponding
-     * database migration, as they are stored directly in the {@code status} column.</p>
-     */
-    public enum SagaStatus {
-
-        /**
-         * Initial state — order created locally, waiting for inventory reservation.
-         */
-        PENDING,
-
-        /**
-         * Inventory successfully reserved via Catalog Service — waiting for
-         * final order confirmation.
-         */
-        INVENTORY_RESERVED,
-
-        /**
-         * Terminal success state — order confirmed, all inventory committed.
-         */
-        COMPLETED,
-
-        /**
-         * Active compensation in progress — restoring previously decremented
-         * inventory after a mid-saga failure.
-         */
-        COMPENSATING,
-
-        /**
-         * Terminal failure state — order not placed, or compensation completed
-         * after a failure.
-         */
-        FAILED
     }
 }
