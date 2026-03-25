@@ -151,6 +151,22 @@ public class SecurityConfig {
                 // (AccountActionBean line 195-197) that guarded account operations.
                 .anyRequest().authenticated()
             )
+            // Configure exception handling to return 401 Unauthorized (not 403 Forbidden)
+            // for unauthenticated requests. In a stateless REST API, 401 is semantically correct:
+            // "I don't know who you are — provide credentials." Without this, Spring Security 6.x
+            // defaults to Http403ForbiddenEntryPoint which returns 403, which incorrectly implies
+            // "I know who you are but you lack permission." This mirrors the monolith's behavior
+            // where AccountActionBean.isAuthenticated() check redirected unauthenticated users
+            // to the signon page (the REST equivalent of a 401 response).
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint((request, response, authException) -> {
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    response.setContentType("application/json");
+                    response.getWriter().write(
+                            "{\"error\":\"Unauthorized\",\"message\":\"Authentication required\"}");
+                })
+            )
+
             // Add JWT authentication filter before Spring Security's username/password filter.
             // This filter extracts the JWT from the Authorization header, validates it via
             // JwtTokenProvider, and sets the SecurityContext so that .anyRequest().authenticated()
