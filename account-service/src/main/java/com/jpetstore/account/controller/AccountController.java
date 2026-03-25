@@ -132,7 +132,7 @@ public class AccountController {
         if (accountOpt.isEmpty()) {
             log.info("Authentication failed for username: {}", request.getUsername());
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                    .body("Invalid username or password. Signon failed.");
+                    .body("Invalid username or password.  Signon failed.");
         }
 
         AccountDTO account = accountOpt.get();
@@ -151,6 +151,11 @@ public class AccountController {
      * The underlying 3-table atomic insert (account + profile + signon) is
      * preserved in the service layer.</p>
      *
+     * <p>The underlying service performs a 3-table atomic insert (account +
+     * profile + signon) then re-reads the created data from the database,
+     * mirroring the monolith's post-insert reload at AccountActionBean.java
+     * line 117: {@code account = accountService.getAccount(account.getUsername());}.</p>
+     *
      * <p>Returns 409 Conflict if an account with the same username already
      * exists, preventing duplicate registrations.</p>
      *
@@ -159,7 +164,7 @@ public class AccountController {
      *         409 Conflict if the username already exists
      */
     @PostMapping
-    public ResponseEntity<?> registerAccount(@Valid @RequestBody AccountDTO accountDTO) {
+    public ResponseEntity<?> createAccount(@Valid @RequestBody AccountDTO accountDTO) {
         log.debug("Registration attempt for username: {}", accountDTO.getUsername());
 
         // Check for duplicate username before attempting insert
@@ -170,6 +175,10 @@ public class AccountController {
                     .body("Account already exists with username: " + accountDTO.getUsername());
         }
 
+        // Mirrors monolith's AccountActionBean.newAccount() lines 116-117:
+        // accountService.insertAccount(account);
+        // account = accountService.getAccount(account.getUsername());
+        // The service's insertAccount() already performs the post-insert reload internally.
         AccountDTO created = accountService.insertAccount(accountDTO);
         log.info("Account registered successfully for username: {}", accountDTO.getUsername());
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
@@ -193,15 +202,25 @@ public class AccountController {
                                            @Valid @RequestBody AccountDTO accountDTO) {
         log.debug("Update attempt for username: {}", username);
 
-        Optional<AccountDTO> updated = accountService.updateAccount(username, accountDTO);
-        if (updated.isEmpty()) {
+        // Pre-check existence — mirrors the REST convention of returning 404
+        // before attempting the update. This prevents the service layer's
+        // RuntimeException from propagating as a 500 error.
+        Optional<AccountDTO> existing = accountService.getAccount(username);
+        if (existing.isEmpty()) {
             log.info("Account not found for update — username: {}", username);
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body("Account not found: " + username);
+            return ResponseEntity.notFound().build();
         }
 
+        // Mirrors monolith's AccountActionBean.editAccount() lines 138-139:
+        // accountService.updateAccount(account);
+        // account = accountService.getAccount(account.getUsername());
+        // The service's updateAccount() performs conditional password update
+        // (only when password is non-null and non-empty, per monolith lines 71-72)
+        // and returns the updated account via an internal getAccount() call.
+        Optional<AccountDTO> updated = accountService.updateAccount(username, accountDTO);
         log.info("Account updated successfully for username: {}", username);
-        return ResponseEntity.ok(updated.get());
+        return ResponseEntity.ok(updated.orElseThrow(() ->
+                new RuntimeException("Account disappeared during update: " + username)));
     }
 
     /**
