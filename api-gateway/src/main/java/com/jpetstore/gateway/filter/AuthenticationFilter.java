@@ -22,33 +22,25 @@ import io.jsonwebtoken.security.Keys;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
-import java.util.List;
 
 import javax.crypto.SecretKey;
 
-import jakarta.annotation.PostConstruct;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.cloud.gateway.filter.GatewayFilterChain;
-import org.springframework.cloud.gateway.filter.GlobalFilter;
-import org.springframework.core.Ordered;
 import org.springframework.http.HttpCookie;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.server.reactive.ServerHttpRequest;
-import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.ReactiveSecurityContextHolder;
 import org.springframework.security.core.context.SecurityContextImpl;
-import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
+import org.springframework.web.server.WebFilter;
+import org.springframework.web.server.WebFilterChain;
 
 import reactor.core.publisher.Mono;
 
 /**
- * JWT Authentication GlobalFilter for the JPetStore API Gateway.
+ * JWT Authentication WebFilter for the JPetStore API Gateway.
  *
  * <p>This filter replaces the monolith's session-scoped {@code AccountActionBean.authenticated}
  * flag (see {@code AccountActionBean.java} line 61: {@code private boolean authenticated;})
@@ -58,24 +50,27 @@ import reactor.core.publisher.Mono;
  * <ol>
  *   <li>Extract JWT token from {@code Authorization: Bearer <token>} header or
  *       {@code jwt-token} HTTP-only cookie</li>
- *   <li>For protected paths: validate token, return 401 if invalid or missing</li>
- *   <li>For public paths: pass through without error if token is absent or invalid</li>
- *   <li>On valid token: extract {@code username} (subject) and {@code accountId} (custom claim),
- *       propagate as {@code X-Auth-Username} and {@code X-Auth-AccountId} headers to downstream services</li>
+ *   <li>If a valid token is found: extract claims, populate Spring Security's
+ *       {@code ReactiveSecurityContext}, and propagate claims as downstream headers</li>
+ *   <li>If no token or invalid token: pass through without populating SecurityContext.
+ *       Spring Security's authorization rules (in SecurityConfig) will return 401
+ *       for protected paths and permit access to public paths.</li>
  * </ol>
  *
- * <h3>Protected vs Public Path Classification</h3>
- * <p>Protected paths require valid JWT authentication, matching the monolith's behavior:</p>
- * <ul>
- *   <li>{@code /actions/Order.action} — per {@code OrderActionBean.newOrderForm()} line 125:
- *       {@code if (accountBean == null || !accountBean.isAuthenticated())}</li>
- *   <li>{@code /api/orders/} — all REST API order operations</li>
- * </ul>
- * <p>Public paths pass through without JWT (catalog browsing, signon, cart, static assets, actuator).</p>
+ * <h3>WebFilter vs GlobalFilter</h3>
+ * <p>This filter is registered as a {@link WebFilter} (NOT a {@code GlobalFilter}) and
+ * is placed in the Spring Security filter chain via
+ * {@code SecurityConfig.addFilterBefore(..., SecurityWebFiltersOrder.AUTHENTICATION)}.
+ * This ensures JWT validation runs in the SAME filter chain as Spring Security's
+ * {@code AuthorizationWebFilter}, so the populated {@code SecurityContext} is visible
+ * to the authorization check. A {@code GlobalFilter} would run in a separate chain
+ * AFTER the Security WebFilter chain, making the SecurityContext unavailable to
+ * the authorization check — which was the root cause of the original 401 bug.</p>
  *
- * <h3>Filter Ordering</h3>
- * <p>Executes at order {@code -100}, BEFORE {@code RoutingFlagFilter} (order 0),
- * ensuring JWT validation and claim propagation occur before routing decisions.</p>
+ * <h3>Claim Propagation</h3>
+ * <p>On valid JWT, the filter adds {@code X-Auth-Username} and {@code X-Auth-AccountId}
+ * headers to the downstream request, enabling backend microservices to identify the
+ * authenticated user without re-validating the JWT.</p>
  *
  * <h3>JJWT 0.12.6 API</h3>
  * <p>Uses the current JJWT 0.12.6 API: {@code Jwts.parser().verifyWith(key).requireIssuer(issuer)
@@ -85,44 +80,12 @@ import reactor.core.publisher.Mono;
  * <p>Fully non-blocking. Returns {@code Mono<Void>} throughout. No servlet imports,
  * no blocking calls. Runs on Spring Cloud Gateway's Netty event loop.</p>
  *
- * @see org.springframework.cloud.gateway.filter.GlobalFilter
- * @see org.springframework.core.Ordered
+ * @see org.springframework.web.server.WebFilter
+ * @see org.springframework.security.web.server.SecurityWebFilterChain
  */
-@Component
-public class AuthenticationFilter implements GlobalFilter, Ordered {
+public class AuthenticationFilter implements WebFilter {
 
     private static final Logger log = LoggerFactory.getLogger(AuthenticationFilter.class);
-
-    // -------------------------------------------------------------------------
-    // Path Classification Constants
-    // -------------------------------------------------------------------------
-
-    /**
-     * URL path prefixes that require a valid JWT token.
-     *
-     * <p>Derived from the monolith's authentication checks:</p>
-     * <ul>
-     *   <li>{@code /actions/Order.action} — OrderActionBean.newOrderForm() (line 125),
-     *       listOrders() (line 109), viewOrder() (line 174) all read the authenticated
-     *       AccountActionBean from session</li>
-     *   <li>{@code /api/orders/} — all REST API order operations require authenticated user</li>
-     * </ul>
-     *
-     * <p>All other paths are public:</p>
-     * <ul>
-     *   <li>{@code /actions/Catalog.action} — CatalogActionBean has zero auth checks</li>
-     *   <li>{@code /actions/Account.action} — signon/registration are public; editAccount auth
-     *       is deferred to the monolith during coexistence</li>
-     *   <li>{@code /actions/Cart.action} — cart is public for unauthenticated users</li>
-     *   <li>{@code /css/}, {@code /images/} — static assets</li>
-     *   <li>{@code /api/accounts/signon} — authentication endpoint must be public</li>
-     *   <li>{@code /actuator/} — health/info endpoints</li>
-     * </ul>
-     */
-    private static final List<String> PROTECTED_PATH_PREFIXES = List.of(
-            "/actions/Order.action",
-            "/api/orders"
-    );
 
     // -------------------------------------------------------------------------
     // Downstream Header Constants
@@ -156,68 +119,33 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
     private static final String JWT_COOKIE_NAME = "jwt-token";
 
     // -------------------------------------------------------------------------
-    // Configuration Properties (injected from application.yml)
+    // Configuration (injected via constructor from SecurityConfig)
     // -------------------------------------------------------------------------
 
-    /**
-     * HMAC-SHA signing key for JWT signature verification.
-     * Injected from {@code jwt.secret} in application.yml.
-     * The default value is for development/testing only — MUST be overridden
-     * via {@code JWT_SECRET} environment variable in production.
-     */
-    @Value("${jwt.secret:jpetstore-gateway-default-secret-key-change-in-production}")
-    private String jwtSecret;
+    /** HMAC-SHA signing key for JWT signature verification. */
+    private final SecretKey secretKey;
+
+    /** Expected issuer claim in the JWT token. */
+    private final String jwtIssuer;
 
     /**
-     * Expected issuer claim in the JWT token.
-     * Tokens with a different issuer will be rejected.
-     * Injected from {@code jwt.issuer} in application.yml.
-     */
-    @Value("${jwt.issuer:jpetstore}")
-    private String jwtIssuer;
-
-    /**
-     * Cached HMAC-SHA signing key for JWT signature verification.
+     * Constructs the AuthenticationFilter with the given JWT configuration.
      *
-     * <p>Initialized once in {@link #initSecretKey()} to avoid the overhead of
-     * recreating the {@link SecretKey} from the raw string on every gateway
-     * request. HMAC key construction involves byte array allocation and
-     * cryptographic object creation that is unnecessary to repeat per-request.</p>
-     */
-    private SecretKey cachedSecretKey;
-
-    /**
-     * Initializes the cached {@link SecretKey} from the configured JWT secret string.
+     * <p>The SecretKey is derived from the raw secret string once at construction
+     * time to avoid per-request key construction overhead in a gateway that
+     * processes all traffic.</p>
      *
-     * <p>Called once after dependency injection is complete. All subsequent JWT
-     * validation operations use this cached key instance.</p>
+     * @param jwtSecret raw HMAC-SHA signing key string (from {@code jwt.secret} config)
+     * @param jwtIssuer expected issuer claim (from {@code jwt.issuer} config)
      */
-    @PostConstruct
-    protected void initSecretKey() {
-        this.cachedSecretKey = Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
-        log.info("JWT SecretKey initialized and cached for gateway authentication filter");
+    public AuthenticationFilter(String jwtSecret, String jwtIssuer) {
+        this.secretKey = Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
+        this.jwtIssuer = jwtIssuer;
+        log.info("JWT AuthenticationFilter initialized (WebFilter mode, registered in Security chain)");
     }
 
     // -------------------------------------------------------------------------
-    // Ordered Interface Implementation
-    // -------------------------------------------------------------------------
-
-    /**
-     * Returns the filter execution order.
-     *
-     * <p>Returns {@code -100} to execute BEFORE the {@code RoutingFlagFilter} (order 0),
-     * ensuring JWT validation and claim propagation into downstream request headers
-     * occur before any routing decisions are made by the Strangler Fig routing logic.</p>
-     *
-     * @return {@code -100} — high-priority execution order
-     */
-    @Override
-    public int getOrder() {
-        return -100;
-    }
-
-    // -------------------------------------------------------------------------
-    // GlobalFilter Implementation
+    // WebFilter Implementation
     // -------------------------------------------------------------------------
 
     /**
@@ -225,53 +153,47 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
      *
      * <p>Execution flow:</p>
      * <ol>
-     *   <li>Extract the request path and determine if it is protected</li>
      *   <li>Attempt to extract a JWT token from the Authorization header or cookie</li>
-     *   <li>If no token is found:
-     *       <ul>
-     *         <li>Protected path → return 401 Unauthorized</li>
-     *         <li>Public path → pass through to the filter chain</li>
-     *       </ul>
-     *   </li>
+     *   <li>If no token is found: pass through — Spring Security handles 401 for protected paths</li>
      *   <li>If a token is found, validate it using JJWT 0.12.6:
      *       <ul>
-     *         <li>Valid token → extract claims, propagate as headers, continue chain</li>
-     *         <li>Invalid token on protected path → return 401 Unauthorized</li>
-     *         <li>Invalid token on public path → pass through without claims</li>
+     *         <li>Valid token → populate SecurityContext, propagate claims as headers, continue chain</li>
+     *         <li>Invalid token → log warning, pass through without SecurityContext.
+     *             Spring Security handles 401 for protected paths, public paths pass through.</li>
      *       </ul>
      *   </li>
      * </ol>
      *
+     * <p><strong>Key design decision:</strong> This filter NEVER returns 401 directly.
+     * Authorization (which paths require authentication) is solely the responsibility of
+     * {@code SecurityConfig}'s authorization rules. This filter only populates the
+     * SecurityContext — it does not enforce access control.</p>
+     *
      * @param exchange the current server web exchange (reactive)
-     * @param chain    the gateway filter chain for continuing downstream
+     * @param chain    the WebFilter chain for continuing downstream
      * @return {@code Mono<Void>} — fully reactive, non-blocking
      */
     @Override
-    public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
+    public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
         String path = exchange.getRequest().getURI().getPath();
-        boolean isProtected = isProtectedPath(path);
 
         // Attempt to extract JWT token from Authorization header or cookie
         String token = extractToken(exchange.getRequest());
 
-        // No token found — decide based on path protection
+        // No token found — pass through. Spring Security's authorization rules
+        // will return 401 for protected paths and permit access for public paths.
         if (token == null) {
-            if (isProtected) {
-                log.debug("No JWT token found for protected path: {}", path);
-                return onUnauthorized(exchange);
-            }
-            // Public path — pass through without authentication
             return chain.filter(exchange);
         }
 
         // Token found — validate and extract claims
         try {
-            // Use the cached SecretKey (initialized once in @PostConstruct) to avoid
+            // Use the cached SecretKey (initialized once in constructor) to avoid
             // per-request key construction overhead in a gateway processing all traffic.
             // JJWT 0.12.6 API: parser() → verifyWith() → requireIssuer() → build()
             //                   → parseSignedClaims() → getPayload()
             Claims claims = Jwts.parser()
-                    .verifyWith(cachedSecretKey)
+                    .verifyWith(secretKey)
                     .requireIssuer(jwtIssuer)
                     .build()
                     .parseSignedClaims(token)
@@ -292,9 +214,10 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
                     .build();
 
             // Populate the ReactiveSecurityContext so that Spring Security's
-            // .authenticated() check on protected paths succeeds. Without this,
-            // SecurityConfig's .authenticated() matcher finds no Authentication
-            // object and returns 401 even for valid JWT tokens.
+            // .authenticated() check on protected paths succeeds. This is the critical
+            // integration point: by writing the Authentication object into the reactive
+            // context, the downstream AuthorizationWebFilter (in the same WebFilter chain)
+            // will find a valid Authentication and permit access.
             UsernamePasswordAuthenticationToken authentication =
                     new UsernamePasswordAuthenticationToken(
                             username,
@@ -310,15 +233,10 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
 
         } catch (JwtException e) {
             // JWT validation failed — expired, invalid signature, malformed, wrong issuer, etc.
-            log.debug("JWT validation failed for path {}: {}", path, e.getMessage());
-
-            if (isProtected) {
-                return onUnauthorized(exchange);
-            }
-
-            // Public path with invalid token — pass through without claims.
-            // This allows users with expired tokens to still browse public pages
+            // Do NOT return 401 here — let Spring Security handle authorization.
+            // This allows users with expired/invalid tokens to still browse public pages
             // without being forced to re-authenticate until they access protected resources.
+            log.debug("JWT validation failed for path {}: {}", path, e.getMessage());
             return chain.filter(exchange);
         }
     }
@@ -360,44 +278,5 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
         }
 
         return null;
-    }
-
-    /**
-     * Determines whether the given request path requires JWT authentication.
-     *
-     * <p>A path is considered protected if it starts with any of the prefixes
-     * defined in {@link #PROTECTED_PATH_PREFIXES}. All other paths are public.</p>
-     *
-     * <p>Protected paths are derived from the monolith's authentication checks:</p>
-     * <ul>
-     *   <li>{@code /actions/Order.action} — OrderActionBean.newOrderForm() checks
-     *       {@code accountBean.isAuthenticated()} at line 125</li>
-     *   <li>{@code /api/orders/} — REST API order endpoints always require authentication</li>
-     * </ul>
-     *
-     * @param path the request URI path
-     * @return {@code true} if the path requires authentication, {@code false} otherwise
-     */
-    private boolean isProtectedPath(String path) {
-        return PROTECTED_PATH_PREFIXES.stream()
-                .anyMatch(path::startsWith);
-    }
-
-    /**
-     * Sends a 401 Unauthorized response.
-     *
-     * <p>Sets the HTTP status code to {@code 401 Unauthorized} and completes the
-     * response immediately without forwarding to downstream services. This mirrors
-     * the monolith's behavior where unauthenticated users attempting to access
-     * protected resources (e.g., OrderActionBean.newOrderForm()) are redirected
-     * to the signon page with message "You must sign on before attempting to check out."</p>
-     *
-     * @param exchange the current server web exchange
-     * @return {@code Mono<Void>} — completes the response
-     */
-    private Mono<Void> onUnauthorized(ServerWebExchange exchange) {
-        ServerHttpResponse response = exchange.getResponse();
-        response.setStatusCode(HttpStatus.UNAUTHORIZED);
-        return response.setComplete();
     }
 }

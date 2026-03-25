@@ -25,127 +25,15 @@ spring:
   # ---------------------------------------------------------------------------
   # Spring Cloud Gateway Route Definitions
   # ---------------------------------------------------------------------------
-  # Routes are evaluated in declaration order. More specific routes MUST appear
-  # before the catch-all fallback. Routes are organized into:
+  # All 11 routes are defined PROGRAMMATICALLY in RouteConfig.java (the single
+  # source of truth). YAML route definitions have been removed to avoid
+  # duplication and deprecated property key warnings. Routes are organized into:
   #   1. Flag-controlled Strangler Fig routes (*.action — default to monolith)
   #   2. Static microservice API routes (always route to microservices)
   #   3. Static asset routes (always route to monolith)
   #   4. Catch-all fallback (lowest priority — routes to monolith)
+  # See RouteConfig.java for the complete route table.
   # ---------------------------------------------------------------------------
-  cloud:
-    gateway:
-      routes:
-        # =====================================================================
-        # 1. FLAG-CONTROLLED STRANGLER FIG ROUTES
-        # =====================================================================
-        # These routes default to the monolith. At runtime, RoutingFlagFilter
-        # reads the routing-flag-key from Redis and overrides the target to
-        # the microservice-uri when the flag value is "microservice".
-        # The *.action URL pattern comes from web.xml line 62:
-        #   <url-pattern>*.action</url-pattern>
-        # Stripes convention: /actions/{BeanName}.action
-        # =====================================================================
-
-        # Account bounded context — /actions/Account.action
-        - id: account-actions
-          uri: http://monolith:8080
-          predicates:
-            - Path=/actions/Account.action**
-          metadata:
-            routing-flag-key: routing.flag.account-service
-            microservice-uri: http://account-service:8081
-
-        # Catalog bounded context — /actions/Catalog.action
-        - id: catalog-actions
-          uri: http://monolith:8080
-          predicates:
-            - Path=/actions/Catalog.action**
-          metadata:
-            routing-flag-key: routing.flag.catalog-service
-            microservice-uri: http://catalog-service:8082
-
-        # Order bounded context (Cart) — /actions/Cart.action
-        # Cart is part of the Order bounded context per AAP Section 0.1.1
-        - id: cart-actions
-          uri: http://monolith:8080
-          predicates:
-            - Path=/actions/Cart.action**
-          metadata:
-            routing-flag-key: routing.flag.order-service
-            microservice-uri: http://order-service:8083
-
-        # Order bounded context (Order) — /actions/Order.action
-        # Both Cart and Order use routing.flag.order-service
-        - id: order-actions
-          uri: http://monolith:8080
-          predicates:
-            - Path=/actions/Order.action**
-          metadata:
-            routing-flag-key: routing.flag.order-service
-            microservice-uri: http://order-service:8083
-
-        # =====================================================================
-        # 2. STATIC MICROSERVICE API ROUTES
-        # =====================================================================
-        # REST APIs exposed by new microservices. These always route to
-        # their respective microservice — no routing flag evaluation.
-        # =====================================================================
-
-        # Account Service REST API
-        - id: account-api
-          uri: http://account-service:8081
-          predicates:
-            - Path=/api/accounts/**
-
-        # Catalog Service REST API
-        - id: catalog-api
-          uri: http://catalog-service:8082
-          predicates:
-            - Path=/api/catalog/**
-
-        # Order Service REST API
-        - id: order-api
-          uri: http://order-service:8083
-          predicates:
-            - Path=/api/orders/**
-
-        # Cart REST API (served by Order Service)
-        - id: cart-api
-          uri: http://order-service:8083
-          predicates:
-            - Path=/api/cart/**
-
-        # =====================================================================
-        # 3. STATIC ASSET ROUTES
-        # =====================================================================
-        # CSS and images always come from the monolith. Static assets are
-        # not modified per AAP Section 0.3.2.
-        # =====================================================================
-
-        # CSS static assets
-        - id: static-css
-          uri: http://monolith:8080
-          predicates:
-            - Path=/css/**
-
-        # Image static assets
-        - id: static-images
-          uri: http://monolith:8080
-          predicates:
-            - Path=/images/**
-
-        # =====================================================================
-        # 4. CATCH-ALL MONOLITH FALLBACK
-        # =====================================================================
-        # Any request not matching the above patterns falls through to the
-        # monolith (e.g., /, index.html, help.html). This is the lowest
-        # priority route.
-        # =====================================================================
-        - id: monolith-fallback
-          uri: http://monolith:8080
-          predicates:
-            - Path=/**
-          order: 9999
 
   # ---------------------------------------------------------------------------
   # Redis Connection Configuration
@@ -188,7 +76,7 @@ routing:
 # for production deployments.
 # =============================================================================
 jwt:
-  secret: ${JWT_SECRET:jpetstore-gateway-default-secret-key-change-in-production}
+  secret: ${JWT_SECRET:jpetstore-jwt-secret-key-for-development-only-change-in-production}
   issuer: jpetstore
   expiration: 3600
 

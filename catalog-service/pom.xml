@@ -20,7 +20,7 @@
 
   <groupId>com.jpetstore</groupId>
   <artifactId>catalog-service</artifactId>
-  <version>1.0.0-SNAPSHOT</version>
+  <version>6.2.1-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>JPetStore Catalog Service</name>

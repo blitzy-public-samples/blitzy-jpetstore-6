@@ -154,6 +154,10 @@
           <groupId>org.springframework.boot</groupId>
           <artifactId>spring-boot-maven-plugin</artifactId>
           <version>${spring-boot.version}</version>
+          <!-- NOTE: repackage execution is NOT defined here in pluginManagement because
+               not all child modules have a main class yet. Each module that needs an
+               executable fat JAR must declare the repackage execution explicitly in its
+               own <build><plugins> section (e.g., api-gateway/pom.xml). -->
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
