@@ -78,7 +78,7 @@ public class CategoryController {
         log.debug("GET /api/categories — fetching all categories");
         List<Category> categories = catalogService.getCategoryList();
         List<CategoryDTO> dtos = categories.stream()
-                .map(CategoryController::toDTO)
+                .map(this::toDTO)
                 .collect(Collectors.toList());
         log.debug("Returning {} categories", dtos.size());
         return ResponseEntity.ok(dtos);
@@ -90,19 +90,19 @@ public class CategoryController {
      * <p>Replaces the monolith's {@code CatalogActionBean.viewCategory()} which calls
      * {@code catalogService.getCategory(categoryId)} and renders Category.jsp.</p>
      *
-     * @param id the category identifier (e.g., "FISH", "DOGS", "CATS", "REPTILES", "BIRDS")
+     * @param categoryId the category identifier (e.g., "FISH", "DOGS", "CATS", "REPTILES", "BIRDS")
      * @return HTTP 200 with the {@link CategoryDTO} if found;
      *         HTTP 404 if no category exists with the given ID
      */
     @GetMapping("/{id}")
-    public ResponseEntity<CategoryDTO> getCategoryById(@PathVariable String id) {
-        log.debug("GET /api/categories/{} — fetching category", id);
-        Category category = catalogService.getCategory(id);
+    public ResponseEntity<CategoryDTO> getCategoryById(@PathVariable("id") String categoryId) {
+        log.debug("GET /api/categories/{} — fetching category", categoryId);
+        Category category = catalogService.getCategory(categoryId);
         if (category != null) {
-            log.debug("Category found: {}", id);
+            log.debug("Category found: {}", categoryId);
             return ResponseEntity.ok(toDTO(category));
         } else {
-            log.debug("Category not found: {}", id);
+            log.debug("Category not found: {}", categoryId);
             return ResponseEntity.notFound().build();
         }
     }
@@ -116,7 +116,7 @@ public class CategoryController {
      * @param category the entity to convert (must not be null)
      * @return the populated CategoryDTO
      */
-    private static CategoryDTO toDTO(Category category) {
+    private CategoryDTO toDTO(Category category) {
         CategoryDTO dto = new CategoryDTO();
         dto.setCategoryId(category.getCatId());
         dto.setName(category.getName());
