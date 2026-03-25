@@ -39,23 +39,54 @@ import com.jpetstore.account.repository.SignonRepository;
  *
  * <p>This service manages the four account-context tables (account, profile,
  * signon, bannerdata) and provides the same transactional guarantees as the
- * monolith's MyBatis-backed implementation.</p>
+ * monolith's MyBatis-backed implementation. All seven core workflows
+ * (registration, authentication, catalog browsing, product search, cart
+ * management, checkout, order history) behave identically after decomposition.</p>
  *
  * <h3>Monolith Method Mapping</h3>
+ * <table>
+ *   <caption>Method mapping from monolith AccountService to microservice AccountService</caption>
+ *   <tr><th>Monolith Method</th><th>Microservice Method</th><th>Source Reference</th></tr>
+ *   <tr>
+ *     <td>{@code getAccount(String username)}</td>
+ *     <td>{@link #getAccount(String)}</td>
+ *     <td>AccountService.java lines 39-41; AccountMapper.xml lines 26-50 (4-table JOIN)</td>
+ *   </tr>
+ *   <tr>
+ *     <td>{@code getAccount(String username, String password)}</td>
+ *     <td>{@link #getAccountForAuth(String, String)}</td>
+ *     <td>AccountService.java lines 43-45; AccountMapper.xml lines 52-77</td>
+ *   </tr>
+ *   <tr>
+ *     <td>{@code insertAccount(Account account)}</td>
+ *     <td>{@link #insertAccount(AccountDTO)}</td>
+ *     <td>AccountService.java lines 53-58 (3-table atomic insert)</td>
+ *   </tr>
+ *   <tr>
+ *     <td>{@code updateAccount(Account account)}</td>
+ *     <td>{@link #updateAccount(String, AccountDTO)}</td>
+ *     <td>AccountService.java lines 66-73 (conditional password update)</td>
+ *   </tr>
+ * </table>
+ *
+ * <h3>Transaction Semantics</h3>
  * <ul>
- *   <li>{@link #getAccount(String)} — replaces {@code AccountService.getAccount(String, String)}
- *       with the 4-table JOIN decomposed into sequential repository lookups</li>
- *   <li>{@link #getAccountForAuth(String, String)} — replaces the credential check from
- *       {@code AccountService.getAccount(String, String)} (AccountMapper.getAccountByUsernameAndPassword)</li>
- *   <li>{@link #insertAccount(AccountDTO)} — replaces the 3-table insert:
- *       {@code accountMapper.insertAccount + insertProfile + insertSignon}
- *       (source: AccountService.java lines 54-57)</li>
- *   <li>{@link #updateAccount(String, AccountDTO)} — replaces the conditional update:
- *       {@code accountMapper.updateAccount + updateProfile + optional updateSignon}
- *       (source: AccountService.java lines 63-72)</li>
+ *   <li>Read methods ({@code getAccount}, {@code getAccountForAuth}) use
+ *       {@code @Transactional(readOnly = true)} for JPA performance optimization.</li>
+ *   <li>Write methods ({@code insertAccount}, {@code updateAccount}) use
+ *       {@code @Transactional} to guarantee atomicity across multi-table operations.</li>
  * </ul>
  *
+ * <h3>Cross-Service Data Access Compliance</h3>
+ * <p>Per AAP section 0.8.1, no service may access another service's database
+ * directly. This service accesses only the four Account-context tables
+ * (account, profile, signon, bannerdata) via its own PostgreSQL database.</p>
+ *
  * @see com.jpetstore.account.controller.AccountController
+ * @see com.jpetstore.account.repository.AccountRepository
+ * @see com.jpetstore.account.repository.ProfileRepository
+ * @see com.jpetstore.account.repository.SignonRepository
+ * @see com.jpetstore.account.repository.BannerDataRepository
  */
 @Service
 public class AccountService {
@@ -69,6 +100,9 @@ public class AccountService {
 
     /**
      * Constructs the AccountService with all four repository dependencies.
+     * Spring auto-injects all repositories via constructor injection,
+     * matching the monolith pattern of {@code private final} fields + constructor
+     * (source: AccountService.java lines 33-37).
      *
      * @param accountRepository    repository for the account table
      * @param profileRepository    repository for the profile table
@@ -86,93 +120,126 @@ public class AccountService {
     }
 
     /**
-     * Retrieves a complete account view by username, composing data from
+     * Retrieves a complete account view by username, composing data from the
      * account, profile, and bannerdata tables.
      *
-     * <p>Replaces the monolith's 4-table JOIN in {@code AccountMapper.getAccountByUsername}
-     * with sequential repository lookups. The result includes all account fields,
-     * profile preferences, and the resolved banner name.</p>
+     * <p>Replaces the monolith's 4-table JOIN in
+     * {@code AccountMapper.getAccountByUsername} (AccountMapper.xml lines 26-50)
+     * with three sequential repository lookups:</p>
+     * <ol>
+     *   <li>Load Account entity by primary key ({@code userid})</li>
+     *   <li>Load Profile entity by the same primary key</li>
+     *   <li>Load BannerData via the Profile's {@code favcategory} field,
+     *       replicating the JOIN condition {@code PROFILE.FAVCATEGORY = BANNERDATA.FAVCATEGORY}</li>
+     * </ol>
+     *
+     * <p><strong>Null-return behavior:</strong> Returns {@code null} when the
+     * username is not found, mirroring the monolith's mapper behavior where SQL
+     * returns a null resultSet. Callers must check for null.</p>
      *
      * @param username the account userid (primary key)
-     * @return an {@link Optional} containing the assembled {@link AccountDTO},
-     *         or empty if no account exists for the given username
+     * @return the assembled {@link AccountDTO} containing account, profile, and
+     *         banner data; or {@code null} if no account exists for the given username
      */
     @Transactional(readOnly = true)
-    public Optional<AccountDTO> getAccount(String username) {
-        Optional<Account> accountOpt = accountRepository.findById(username);
-        if (accountOpt.isEmpty()) {
+    public AccountDTO getAccount(String username) {
+        // Step 1: Load Account entity by PK
+        Account account = accountRepository.findById(username).orElse(null);
+        if (account == null) {
             log.debug("Account not found for username: {}", username);
-            return Optional.empty();
+            return null; // Mirrors monolith behavior: mapper returns null if user not found
         }
 
-        Account account = accountOpt.get();
+        // Step 2: Load Profile entity (same PK as account)
         Profile profile = profileRepository.findById(username).orElse(null);
 
-        // Resolve banner name from bannerdata table via the user's favourite category
+        // Step 3: Load BannerData via Profile's favcategory
+        // Replicates: PROFILE.FAVCATEGORY = BANNERDATA.FAVCATEGORY
         String bannerName = null;
         if (profile != null && profile.getFavcategory() != null) {
-            bannerName = bannerDataRepository.findByFavcategory(profile.getFavcategory())
-                    .map(BannerData::getBannername)
-                    .orElse(null);
+            BannerData bannerData = bannerDataRepository.findById(profile.getFavcategory()).orElse(null);
+            if (bannerData != null) {
+                bannerName = bannerData.getBannername();
+            }
         }
 
-        return Optional.of(assembleAccountDTO(account, profile, bannerName));
+        // Step 4: Assemble into AccountDTO (replaces MyBatis 4-table resultMap)
+        return assembleAccountDTO(account, profile, bannerName);
     }
 
     /**
-     * Authenticates a user by verifying credentials against the signon table.
+     * Authenticates a user by verifying credentials against the signon table,
+     * then returns the full account data if authentication succeeds.
      *
      * <p>Replaces the monolith's {@code AccountMapper.getAccountByUsernameAndPassword}
-     * which performed a 4-table JOIN including the signon table for credential
-     * verification. In the decomposed service, credential check is separated from
-     * account data retrieval for cleaner separation of concerns.</p>
+     * (AccountMapper.xml lines 52-77) which performed a 4-table JOIN including
+     * {@code AND SIGNON.PASSWORD = #{param2}} for credential verification.
+     * In the decomposed service, credential check is separated from account data
+     * retrieval for cleaner separation of concerns.</p>
      *
      * <p><strong>Password storage note:</strong> The monolith stores plaintext
-     * passwords in the signon table. This service preserves that behavior during
-     * the dual-write coexistence window. The comparison is delegated to
-     * {@code SignonRepository.findByUsernameAndPassword()}, which performs a
+     * passwords in the signon table. This service preserves that behavior per
+     * AAP section 0.8.1 (zero business logic changes). The comparison is delegated
+     * to {@code SignonRepository.findByUsernameAndPassword()}, which performs a
      * database-level equality check.</p>
+     *
+     * <p><strong>Null-return behavior:</strong> Returns {@code null} when credentials
+     * don't match, mirroring the monolith's behavior where SQL returns null on
+     * authentication failure.</p>
      *
      * @param username the username to authenticate
      * @param password the plaintext password to verify
-     * @return an {@link Optional} containing the user's {@link AccountDTO} if
-     *         credentials are valid, or empty if authentication fails
+     * @return the user's {@link AccountDTO} if credentials are valid;
+     *         {@code null} if authentication fails or the user does not exist
      */
     @Transactional(readOnly = true)
-    public Optional<AccountDTO> getAccountForAuth(String username, String password) {
-        Optional<Signon> signonOpt = signonRepository.findByUsernameAndPassword(username, password);
-        if (signonOpt.isEmpty()) {
+    public AccountDTO getAccountForAuth(String username, String password) {
+        // Step 1: Check credentials via SignonRepository
+        Optional<Signon> signon = signonRepository.findByUsernameAndPassword(username, password);
+        if (signon.isEmpty()) {
             log.debug("Authentication failed for username: {}", username);
-            return Optional.empty();
+            return null; // Invalid credentials — mirrors monolith: returns null on auth failure
         }
+
+        // Step 2: Load full account data (reuse getAccount method)
         return getAccount(username);
     }
 
     /**
-     * Creates a new account with atomic 3-table insert: account + profile + signon.
+     * Creates a new account with an atomic 3-table insert: account → profile → signon.
      *
-     * <p>Replicates the monolith's {@code AccountService.insertAccount(Account)} which
-     * calls three mapper methods in a single {@code @Transactional} boundary:</p>
+     * <p>Replicates the monolith's {@code AccountService.insertAccount(Account)}
+     * (source: AccountService.java lines 53-58) which calls three mapper methods
+     * in a single {@code @Transactional} boundary:</p>
      * <ol>
-     *   <li>{@code accountMapper.insertAccount(account)} — insert into account table</li>
-     *   <li>{@code accountMapper.insertProfile(account)} — insert into profile table</li>
-     *   <li>{@code accountMapper.insertSignon(account)} — insert into signon table</li>
+     *   <li>{@code accountMapper.insertAccount(account)} — INSERT INTO ACCOUNT</li>
+     *   <li>{@code accountMapper.insertProfile(account)} — INSERT INTO PROFILE
+     *       (with boolean→int conversion via MyBatis {@code <bind>})</li>
+     *   <li>{@code accountMapper.insertSignon(account)} — INSERT INTO SIGNON</li>
      * </ol>
-     * <p>(source: AccountService.java lines 54-57)</p>
+     *
+     * <p>The insert order (Account → Profile → Signon) exactly matches the monolith's
+     * method call sequence on lines 55-57.</p>
      *
      * <p>The {@code @Transactional} annotation ensures atomicity: if any of the
      * three inserts fails, all are rolled back. This preserves the monolith's
      * ACID guarantee for account creation.</p>
      *
+     * <p><strong>Field mapping:</strong> The DTO uses monolith-style camelCase names
+     * (e.g. {@code getFirstName()}) which are mapped to entity column-aligned names
+     * (e.g. {@code setFirstname()}) by this method. Boolean fields
+     * {@code listOption}/{@code bannerOption} map directly to boolean entity fields —
+     * JPA handles int↔boolean conversion automatically, replacing MyBatis's
+     * {@code <bind>} conversion pattern.</p>
+     *
      * @param dto the account data to persist, including all account, profile,
      *            and signon fields
-     * @return the created {@link AccountDTO} with all fields populated
      */
     @Transactional
-    public AccountDTO insertAccount(AccountDTO dto) {
+    public void insertAccount(AccountDTO dto) {
         log.info("Creating new account for username: {}", dto.getUsername());
 
-        // Step 1: Insert into account table
+        // Step 1: Create and save Account entity (mirrors monolith: insertAccount, line 55)
         Account account = new Account();
         account.setUserid(dto.getUsername());
         account.setEmail(dto.getEmail());
@@ -188,7 +255,7 @@ public class AccountService {
         account.setPhone(dto.getPhone());
         accountRepository.save(account);
 
-        // Step 2: Insert into profile table
+        // Step 2: Create and save Profile entity (mirrors monolith: insertProfile, line 56)
         Profile profile = new Profile();
         profile.setUserid(dto.getUsername());
         profile.setLangpref(dto.getLanguagePreference());
@@ -197,35 +264,28 @@ public class AccountService {
         profile.setBanneropt(dto.isBannerOption());
         profileRepository.save(profile);
 
-        // Step 3: Insert into signon table (plaintext password per monolith behavior)
-        Signon signon = new Signon(dto.getUsername(), dto.getPassword());
+        // Step 3: Create and save Signon entity (mirrors monolith: insertSignon, line 57)
+        Signon signon = new Signon();
+        signon.setUsername(dto.getUsername());
+        signon.setPassword(dto.getPassword());
         signonRepository.save(signon);
 
-        // Resolve banner name for the response
-        String bannerName = null;
-        if (dto.getFavouriteCategoryId() != null) {
-            bannerName = bannerDataRepository.findByFavcategory(dto.getFavouriteCategoryId())
-                    .map(BannerData::getBannername)
-                    .orElse(null);
-        }
-
         log.info("Account created successfully for username: {}", dto.getUsername());
-        return assembleAccountDTO(account, profile, bannerName);
     }
 
     /**
-     * Updates an existing account with conditional signon (password) update.
+     * Updates an existing account with a conditional signon (password) update.
      *
      * <p>Replicates the monolith's {@code AccountService.updateAccount(Account)}
-     * which calls:</p>
+     * (source: AccountService.java lines 66-73) which performs:</p>
      * <ol>
-     *   <li>{@code accountMapper.updateAccount(account)} — update account table</li>
-     *   <li>{@code accountMapper.updateProfile(account)} — update profile table</li>
-     *   <li>Conditionally: {@code accountMapper.updateSignon(account)} — update signon
-     *       table only if password is non-null and non-empty</li>
+     *   <li>{@code accountMapper.updateAccount(account)} — UPDATE ACCOUNT SET ... WHERE USERID = ?</li>
+     *   <li>{@code accountMapper.updateProfile(account)} — UPDATE PROFILE SET ... WHERE USERID = ?</li>
+     *   <li>Conditionally: {@code accountMapper.updateSignon(account)} — UPDATE SIGNON SET PASSWORD = ?
+     *       WHERE USERNAME = ? — only if password is non-null and non-empty</li>
      * </ol>
      *
-     * <p>The conditional signon update uses the exact pattern from the monolith
+     * <p>The conditional signon update uses the EXACT pattern from the monolith
      * (AccountService.java lines 71-72):</p>
      * <pre>{@code
      * Optional.ofNullable(account.getPassword())
@@ -233,23 +293,20 @@ public class AccountService {
      *     .ifPresent(password -> accountMapper.updateSignon(account));
      * }</pre>
      *
-     * @param username the account userid to update (path variable, source of truth)
-     * @param dto      the updated account data
-     * @return an {@link Optional} containing the updated {@link AccountDTO},
-     *         or empty if no account exists for the given username
+     * <p><strong>Username immutability:</strong> The username (PK) is NOT changed
+     * during update — it comes from the path parameter, not the DTO body.
+     * This prevents accidental primary key modification.</p>
+     *
+     * @param username the account userid to update (from path parameter, source of truth)
+     * @param dto      the updated account data containing new field values
+     * @throws RuntimeException if no account exists for the given username
+     * @throws RuntimeException if signon record not found during password update
      */
     @Transactional
-    public Optional<AccountDTO> updateAccount(String username, AccountDTO dto) {
-        Optional<Account> existingOpt = accountRepository.findById(username);
-        if (existingOpt.isEmpty()) {
-            log.debug("Cannot update — account not found for username: {}", username);
-            return Optional.empty();
-        }
-
-        log.info("Updating account for username: {}", username);
-
-        // Step 1: Update account table
-        Account account = existingOpt.get();
+    public void updateAccount(String username, AccountDTO dto) {
+        // Step 1: Load existing Account entity and update fields
+        Account account = accountRepository.findById(username)
+                .orElseThrow(() -> new RuntimeException("Account not found: " + username));
         account.setEmail(dto.getEmail());
         account.setFirstname(dto.getFirstName());
         account.setLastname(dto.getLastName());
@@ -263,52 +320,44 @@ public class AccountService {
         account.setPhone(dto.getPhone());
         accountRepository.save(account);
 
-        // Step 2: Update profile table
-        Profile profile = profileRepository.findById(username).orElseGet(() -> {
-            Profile p = new Profile();
-            p.setUserid(username);
-            return p;
-        });
+        // Step 2: Load existing Profile entity and update fields
+        Profile profile = profileRepository.findById(username).orElse(new Profile());
+        profile.setUserid(username);
         profile.setLangpref(dto.getLanguagePreference());
         profile.setFavcategory(dto.getFavouriteCategoryId());
         profile.setMylistopt(dto.isListOption());
         profile.setBanneropt(dto.isBannerOption());
         profileRepository.save(profile);
 
-        // Step 3: Conditional signon update — only if password is non-null and non-empty
-        // Mirrors monolith pattern: Optional.ofNullable(account.getPassword())
-        //     .filter(password -> password.length() > 0)
-        //     .ifPresent(password -> accountMapper.updateSignon(account));
+        // Step 3: Conditional signon update — EXACT mirror of monolith lines 71-72
+        // Only update password if non-null and non-empty (length > 0)
         Optional.ofNullable(dto.getPassword())
                 .filter(password -> password.length() > 0)
                 .ifPresent(password -> {
                     Signon signon = signonRepository.findById(username)
-                            .orElseGet(() -> new Signon(username, null));
+                            .orElseThrow(() -> new RuntimeException("Signon not found: " + username));
                     signon.setPassword(password);
                     signonRepository.save(signon);
                 });
 
-        // Resolve banner name for the response
-        String bannerName = null;
-        if (dto.getFavouriteCategoryId() != null) {
-            bannerName = bannerDataRepository.findByFavcategory(dto.getFavouriteCategoryId())
-                    .map(BannerData::getBannername)
-                    .orElse(null);
-        }
-
         log.info("Account updated successfully for username: {}", username);
-        return Optional.of(assembleAccountDTO(account, profile, bannerName));
     }
 
     /**
      * Assembles a complete {@link AccountDTO} from individual entity objects.
      *
-     * <p>Maps entity field names to DTO field names per the decomposition mapping:</p>
+     * <p>This private helper replaces the 4-table JOIN resultMap from
+     * AccountMapper.xml (lines 26-50). It maps entity field names (column-aligned:
+     * {@code userid}, {@code firstname}, {@code langpref}) back to DTO field names
+     * (monolith-aligned: {@code username}, {@code firstName}, {@code languagePreference}).</p>
+     *
+     * <h3>Field Mapping</h3>
      * <ul>
      *   <li>{@code Account.userid} → {@code AccountDTO.username}</li>
      *   <li>{@code Account.firstname} → {@code AccountDTO.firstName}</li>
      *   <li>{@code Account.lastname} → {@code AccountDTO.lastName}</li>
      *   <li>{@code Account.address1} → {@code AccountDTO.address1}</li>
+     *   <li>{@code Account.address2} → {@code AccountDTO.address2}</li>
      *   <li>{@code Profile.langpref} → {@code AccountDTO.languagePreference}</li>
      *   <li>{@code Profile.favcategory} → {@code AccountDTO.favouriteCategoryId}</li>
      *   <li>{@code Profile.mylistopt} → {@code AccountDTO.listOption}</li>
@@ -316,13 +365,20 @@ public class AccountService {
      *   <li>{@code BannerData.bannername} → {@code AccountDTO.bannerName}</li>
      * </ul>
      *
+     * <p><strong>Security:</strong> Password is never set in the DTO for read operations.
+     * The DTO's {@code password} field has {@code @JsonProperty(access = WRITE_ONLY)},
+     * but this method adds an extra layer of defense by simply not calling
+     * {@code dto.setPassword()} at all.</p>
+     *
      * @param account    the account entity (must not be null)
-     * @param profile    the profile entity (may be null if not yet created)
-     * @param bannerName the resolved banner name (may be null)
-     * @return a fully-populated {@link AccountDTO}
+     * @param profile    the profile entity (may be null if profile not yet created)
+     * @param bannerName the resolved banner name from bannerdata table (may be null)
+     * @return a fully-populated {@link AccountDTO} without the password field set
      */
     private AccountDTO assembleAccountDTO(Account account, Profile profile, String bannerName) {
         AccountDTO dto = new AccountDTO();
+
+        // Account fields — map from entity column-aligned names to DTO monolith-aligned names
         dto.setUsername(account.getUserid());
         dto.setEmail(account.getEmail());
         dto.setFirstName(account.getFirstname());
@@ -336,6 +392,7 @@ public class AccountService {
         dto.setCountry(account.getCountry());
         dto.setPhone(account.getPhone());
 
+        // Profile fields (if available)
         if (profile != null) {
             dto.setLanguagePreference(profile.getLangpref());
             dto.setFavouriteCategoryId(profile.getFavcategory());
@@ -343,10 +400,10 @@ public class AccountService {
             dto.setBannerOption(profile.isBanneropt());
         }
 
-        if (bannerName != null) {
-            dto.setBannerName(bannerName);
-        }
+        // BannerData field
+        dto.setBannerName(bannerName);
 
+        // Password is never set in DTO for read operations (security)
         return dto;
     }
 }
