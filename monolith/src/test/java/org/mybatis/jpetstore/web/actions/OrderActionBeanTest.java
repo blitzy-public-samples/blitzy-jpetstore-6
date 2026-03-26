@@ -26,6 +26,7 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
@@ -77,25 +78,29 @@ class OrderActionBeanTest {
   // Basic property accessor tests (Diffblue Cover baseline)
   // =========================================================================
 
+  // Test written by Diffblue Cover.
   @Test
   void getOrderListOutputNull() {
     final OrderActionBean orderActionBean = new OrderActionBean();
     assertThat(orderActionBean.getOrderList()).isNull();
   }
 
+  // Test written by Diffblue Cover.
   @Test
   void isShippingAddressRequiredOutputFalse() {
     final OrderActionBean orderActionBean = new OrderActionBean();
     assertThat(orderActionBean.isShippingAddressRequired()).isFalse();
   }
 
+  // Test written by Diffblue Cover.
   @Test
   void constructorOutputNotNull() {
     final OrderActionBean actual = new OrderActionBean();
-    assertThat(actual).isNotNull();
+    assertThat(actual).isNotNull().isNotNull();
     assertThat(actual.getContext()).isNull();
   }
 
+  // Test written by Diffblue Cover.
   @Test
   void isConfirmedOutputFalse() {
     final OrderActionBean orderActionBean = new OrderActionBean();
@@ -269,7 +274,7 @@ class OrderActionBeanTest {
       Resolution resolution = orderActionBean.listOrders();
 
       assertThat(resolution).isNotNull();
-      // Should forward to AccountActionBean (signon form)
+      verifyNoInteractions(restTemplate);
     }
 
     @Test
@@ -471,6 +476,19 @@ class OrderActionBeanTest {
       assertThat(resolution.toString()).contains("ViewOrder.jsp");
     }
 
+    @Test
+    void newOrder_WhenOrderIsNull_ShouldReturnError() {
+      orderActionBean.setShippingAddressRequired(false);
+      orderActionBean.setConfirmed(true);
+      orderActionBean.setOrder(null);
+
+      Resolution resolution = orderActionBean.newOrder();
+
+      assertThat(resolution).isNotNull();
+      assertThat(resolution.toString()).contains("Error.jsp");
+      verifyNoInteractions(restTemplate);
+    }
+
     // ================================================================
     // viewOrder() tests
     // ================================================================
@@ -503,6 +521,7 @@ class OrderActionBeanTest {
       Resolution resolution = orderActionBean.viewOrder();
 
       assertThat(resolution).isNotNull();
+      verifyNoInteractions(restTemplate);
     }
 
     @Test
