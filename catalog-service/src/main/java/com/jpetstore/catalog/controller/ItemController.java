@@ -25,6 +25,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -333,6 +334,34 @@ public class ItemController {
         inventoryService.restoreInventory(itemId, request.getQuantity(), request.getOrderId());
         log.info("Inventory restored for item '{}', orderId='{}'", itemId, request.getOrderId());
         return ResponseEntity.ok().build();
+    }
+
+    // =========================================================================
+    // Exception Handlers
+    // =========================================================================
+
+    /**
+     * Handles {@link IllegalArgumentException} thrown by inventory operations
+     * when validation fails — e.g., attempting to restore inventory for an
+     * orderId that has no matching decrement reservation.
+     *
+     * <p>Returns HTTP 409 Conflict with a JSON error body containing the
+     * exception message. This is the appropriate status code because the
+     * request conflicts with the current state of the resource (no matching
+     * reservation exists to restore against).</p>
+     *
+     * @param ex the exception thrown by the inventory service
+     * @return HTTP 409 with error details
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, Object>> handleIllegalArgument(
+            IllegalArgumentException ex) {
+        log.warn("Inventory operation rejected: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                "error", "Conflict",
+                "message", ex.getMessage(),
+                "status", 409
+        ));
     }
 
     // =========================================================================

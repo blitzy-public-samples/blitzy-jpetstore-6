@@ -267,6 +267,56 @@ public class OrderController {
                 .body(Map.of("error", ex.getMessage()));
     }
 
+    /**
+     * Handles {@link IllegalStateException} thrown by the order creation flow
+     * when a business-rule precondition fails — e.g., the referenced account
+     * does not exist in the Account Service, the cart is empty, or a Saga step
+     * encounters an unrecoverable validation error.
+     *
+     * <p>Returns a 422 Unprocessable Entity response with a descriptive error
+     * message. This prevents the default Spring Boot behavior of returning a
+     * generic 500 Internal Server Error for uncaught exceptions, enabling API
+     * consumers to distinguish between input/validation errors (4xx) and true
+     * server errors (5xx).</p>
+     *
+     * <p><strong>Examples of exceptions caught here:</strong></p>
+     * <ul>
+     *   <li>"Account not found for username: someUser" — from
+     *       {@link OrderService#createOrder} when AccountServiceClient
+     *       cannot verify the user</li>
+     *   <li>"Cart is empty" — when attempting to create an order with no items</li>
+     * </ul>
+     *
+     * @param ex the exception containing the business-rule violation message
+     * @return 422 Unprocessable Entity response with JSON body
+     *         {@code {"error": "<message>"}}
+     */
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<Map<String, String>> handleIllegalState(IllegalStateException ex) {
+        log.warn("Order creation rejected — business rule violation: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                .body(Map.of("error", ex.getMessage()));
+    }
+
+    /**
+     * Handles {@link IllegalArgumentException} thrown when order request
+     * parameters fail programmatic validation beyond Jakarta Bean Validation —
+     * e.g., invalid field values that pass {@code @NotBlank} but are logically
+     * invalid.
+     *
+     * <p>Returns a 400 Bad Request response with the exception message.</p>
+     *
+     * @param ex the exception containing the validation failure message
+     * @return 400 Bad Request response with JSON body
+     *         {@code {"error": "<message>"}}
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, String>> handleIllegalArgument(IllegalArgumentException ex) {
+        log.warn("Order request rejected — invalid argument: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(Map.of("error", ex.getMessage()));
+    }
+
     // ───────────────────────────────────────────────────────────────────────────
     // Private Helper Methods
     // ───────────────────────────────────────────────────────────────────────────

@@ -22,4 +22,10 @@
     <!-- tables (signon, account, profile, bannerdata) in PostgreSQL.          -->
     <include file="db/changelog/001-initial-schema.xml"/>
 
+    <!-- Seed data: migrates default users (j2ee, ACID), their profiles, and  -->
+    <!-- banner data from the monolith's HSQLDB dataload into PostgreSQL.      -->
+    <!-- Ensures cross-service referential integrity (AAP §0.8.1): all        -->
+    <!-- userids referenced in Order Service's orders table exist here.        -->
+    <include file="db/changelog/002-seed-data.xml"/>
+
 </databaseChangeLog>

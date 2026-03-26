@@ -306,6 +306,9 @@ services:
       # Inter-service communication URLs (REST clients)
       ACCOUNT_SERVICE_URL: http://account-service:8081
       CATALOG_SERVICE_URL: http://catalog-service:8082
+      # JWT configuration for service-to-service authentication with Account Service.
+      # Must use the same secret as Account Service and API Gateway.
+      JWT_SECRET: ${JWT_SECRET:-jpetstore-jwt-secret-key-for-development-only-change-in-production}
       # Spring profile
       SPRING_PROFILES_ACTIVE: docker
     depends_on:

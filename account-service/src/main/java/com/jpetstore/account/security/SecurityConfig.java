@@ -144,6 +144,15 @@ public class SecurityConfig {
                 // readiness and liveness probes must access this without authentication.
                 .requestMatchers("/actuator/health").permitAll()
 
+                // Spring Boot's BasicErrorController error dispatch path — must be permitted
+                // so that validation errors (MethodArgumentNotValidException) and other
+                // framework-generated errors are rendered as proper 400/4xx responses instead
+                // of being caught by .anyRequest().authenticated() → 401 Unauthorized.
+                // Without this, POST /api/accounts with missing required fields would return
+                // 401 instead of 400 because Spring dispatches the error to /error, which
+                // would be blocked by the authenticated() rule below.
+                .requestMatchers("/error").permitAll()
+
                 // All other endpoints require authentication:
                 // - GET /api/accounts/{username} — account retrieval
                 // - PUT /api/accounts/{username} — account update

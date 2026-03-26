@@ -164,6 +164,22 @@ spring:
           max-wait: 2000ms
 
 # -----------------------------------------------------------------------------
+# JWT Configuration (Service-to-Service Authentication)
+# -----------------------------------------------------------------------------
+# The Order Service generates a service-account JWT to authenticate itself
+# when calling the Account Service (GET /api/accounts/{username}). The token
+# is signed with the same shared secret used by Account Service and API
+# Gateway, ensuring cross-service JWT validation works seamlessly.
+#
+# The generated token uses subject "order-service" to identify the caller
+# as an internal service rather than a user session.
+# -----------------------------------------------------------------------------
+jwt:
+  secret: ${JWT_SECRET:jpetstore-shared-jwt-secret-key-change-in-production-minimum-256-bits}
+  expiration-ms: 3600000
+  issuer: jpetstore
+
+# -----------------------------------------------------------------------------
 # Inter-Service REST Client URLs
 # -----------------------------------------------------------------------------
 # The Order Service communicates with two other services via synchronous REST:

@@ -118,6 +118,32 @@
       <artifactId>liquibase-core</artifactId>
     </dependency>
 
+    <!-- ========================== -->
+    <!-- JWT (Service-to-Service)  -->
+    <!-- ========================== -->
+
+    <!-- JJWT 0.12.6 — JWT generation for service-to-service authentication.
+         The Order Service generates a short-lived service-account JWT signed with
+         the shared secret (same JWT_SECRET used by Account Service and API Gateway)
+         and injects it as a default Authorization header on outbound REST calls to
+         the Account Service. This is required because Account Service's SecurityConfig
+         enforces authentication on GET /api/accounts/{username}.
+         The JJWT version is managed by the parent POM (jjwt.version=0.12.6). -->
+    <dependency>
+      <groupId>io.jsonwebtoken</groupId>
+      <artifactId>jjwt-api</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.jsonwebtoken</groupId>
+      <artifactId>jjwt-impl</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.jsonwebtoken</groupId>
+      <artifactId>jjwt-jackson</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+
     <!-- ======= -->
     <!-- Testing -->
     <!-- ======= -->

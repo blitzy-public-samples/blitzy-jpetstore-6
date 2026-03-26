@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+       Copyright 2010-2026 the original author or authors.
+
+       Licensed under the Apache License, Version 2.0 (the "License");
+       you may not use this file except in compliance with the License.
+       You may obtain a copy of the License at
+
+          https://www.apache.org/licenses/LICENSE-2.0
+
+       Unless required by applicable law or agreed to in writing, software
+       distributed under the License is distributed on an "AS IS" BASIS,
+       WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+       See the License for the specific language governing permissions and
+       limitations under the License.
+
+-->
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- ===================================================================== -->
+    <!-- Seed Data Migration — Account Service                                 -->
+    <!-- ===================================================================== -->
+    <!-- Migrates the seed data from the monolith's                            -->
+    <!-- jpetstore-hsqldb-dataload.sql into the Account Service PostgreSQL DB. -->
+    <!--                                                                       -->
+    <!-- Source: monolith/src/main/resources/database/                         -->
+    <!--         jpetstore-hsqldb-dataload.sql lines 19-32                     -->
+    <!--                                                                       -->
+    <!-- This ensures cross-service referential integrity at the application   -->
+    <!-- layer (AAP section 0.8.1): all userids referenced in Order Service's  -->
+    <!-- orders table (e.g., j2ee) have corresponding entries in Account       -->
+    <!-- Service's signon/account/profile tables.                              -->
+    <!--                                                                       -->
+    <!-- Uses preconditions with onFail="MARK_RAN" to ensure idempotency —    -->
+    <!-- re-running against an already-populated database will not create      -->
+    <!-- duplicate entries.                                                    -->
+    <!-- ===================================================================== -->
+
+    <!-- ================================================================== -->
+    <!-- Signon Credentials — 2 default users                               -->
+    <!-- ================================================================== -->
+    <changeSet id="002-seed-signon" author="jpetstore-migration">
+        <preConditions onFail="MARK_RAN">
+            <sqlCheck expectedResult="0">SELECT COUNT(*) FROM signon WHERE username = 'j2ee'</sqlCheck>
+        </preConditions>
+        <comment>Seed signon credentials for default users j2ee and ACID (migrated from monolith HSQLDB dataload)</comment>
+        <insert tableName="signon">
+            <column name="username" value="j2ee"/>
+            <column name="password" value="j2ee"/>
+        </insert>
+        <insert tableName="signon">
+            <column name="username" value="ACID"/>
+            <column name="password" value="ACID"/>
+        </insert>
+    </changeSet>
+
+    <!-- ================================================================== -->
+    <!-- Account Records — 2 default users                                  -->
+    <!-- ================================================================== -->
+    <changeSet id="002-seed-account" author="jpetstore-migration">
+        <preConditions onFail="MARK_RAN">
+            <sqlCheck expectedResult="0">SELECT COUNT(*) FROM account WHERE userid = 'j2ee'</sqlCheck>
+        </preConditions>
+        <comment>Seed account records for default users j2ee and ACID (migrated from monolith HSQLDB dataload)</comment>
+        <insert tableName="account">
+            <column name="userid" value="j2ee"/>
+            <column name="email" value="yourname@yourdomain.com"/>
+            <column name="firstname" value="ABC"/>
+            <column name="lastname" value="XYX"/>
+            <column name="status" value="OK"/>
+            <column name="addr1" value="901 San Antonio Road"/>
+            <column name="addr2" value="MS UCUP02-206"/>
+            <column name="city" value="Palo Alto"/>
+            <column name="state" value="CA"/>
+            <column name="zip" value="94303"/>
+            <column name="country" value="USA"/>
+            <column name="phone" value="555-555-5555"/>
+        </insert>
+        <insert tableName="account">
+            <column name="userid" value="ACID"/>
+            <column name="email" value="acid@yourdomain.com"/>
+            <column name="firstname" value="ABC"/>
+            <column name="lastname" value="XYX"/>
+            <column name="status" value="OK"/>
+            <column name="addr1" value="901 San Antonio Road"/>
+            <column name="addr2" value="MS UCUP02-206"/>
+            <column name="city" value="Palo Alto"/>
+            <column name="state" value="CA"/>
+            <column name="zip" value="94303"/>
+            <column name="country" value="USA"/>
+            <column name="phone" value="555-555-5555"/>
+        </insert>
+    </changeSet>
+
+    <!-- ================================================================== -->
+    <!-- Profile Records — 2 default users                                  -->
+    <!-- ================================================================== -->
+    <changeSet id="002-seed-profile" author="jpetstore-migration">
+        <preConditions onFail="MARK_RAN">
+            <sqlCheck expectedResult="0">SELECT COUNT(*) FROM profile WHERE userid = 'j2ee'</sqlCheck>
+        </preConditions>
+        <comment>Seed profile records for default users j2ee (DOGS) and ACID (CATS) (migrated from monolith HSQLDB dataload)</comment>
+        <insert tableName="profile">
+            <column name="userid" value="j2ee"/>
+            <column name="langpref" value="english"/>
+            <column name="favcategory" value="DOGS"/>
+            <column name="mylistopt" valueBoolean="true"/>
+            <column name="banneropt" valueBoolean="true"/>
+        </insert>
+        <insert tableName="profile">
+            <column name="userid" value="ACID"/>
+            <column name="langpref" value="english"/>
+            <column name="favcategory" value="CATS"/>
+            <column name="mylistopt" valueBoolean="true"/>
+            <column name="banneropt" valueBoolean="true"/>
+        </insert>
+    </changeSet>
+
+    <!-- ================================================================== -->
+    <!-- Banner Data — 5 category banners                                   -->
+    <!-- ================================================================== -->
+    <changeSet id="002-seed-bannerdata" author="jpetstore-migration">
+        <preConditions onFail="MARK_RAN">
+            <sqlCheck expectedResult="0">SELECT COUNT(*) FROM bannerdata WHERE favcategory = 'FISH'</sqlCheck>
+        </preConditions>
+        <comment>Seed banner data for all 5 pet categories (migrated from monolith HSQLDB dataload)</comment>
+        <insert tableName="bannerdata">
+            <column name="favcategory" value="FISH"/>
+            <column name="bannername" value="&lt;image src=&quot;../images/banner_fish.gif&quot;&gt;"/>
+        </insert>
+        <insert tableName="bannerdata">
+            <column name="favcategory" value="CATS"/>
+            <column name="bannername" value="&lt;image src=&quot;../images/banner_cats.gif&quot;&gt;"/>
+        </insert>
+        <insert tableName="bannerdata">
+            <column name="favcategory" value="DOGS"/>
+            <column name="bannername" value="&lt;image src=&quot;../images/banner_dogs.gif&quot;&gt;"/>
+        </insert>
+        <insert tableName="bannerdata">
+            <column name="favcategory" value="REPTILES"/>
+            <column name="bannername" value="&lt;image src=&quot;../images/banner_reptiles.gif&quot;&gt;"/>
+        </insert>
+        <insert tableName="bannerdata">
+            <column name="favcategory" value="BIRDS"/>
+            <column name="bannername" value="&lt;image src=&quot;../images/banner_birds.gif&quot;&gt;"/>
+        </insert>
+    </changeSet>
+
+</databaseChangeLog>

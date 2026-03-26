@@ -194,6 +194,21 @@ public class InventoryService {
     public void restoreInventory(String itemId, int quantity, String orderId) {
         log.info("Restoring inventory for item {} by {} for order {} (compensation)", itemId, quantity, orderId);
 
+        // Validate that a matching decrement reservation exists for this orderId + itemId.
+        // This prevents inventory inflation from unmatched restore calls — a restore is
+        // only valid if a prior decrement actually reserved inventory for this order.
+        // Without this check, arbitrary or malformed compensation calls could inflate
+        // inventory beyond the original quantity (AAP §0.7.1 compensation safety).
+        Optional<InventoryReservation> reservationOpt = reservationRepository.findByOrderIdAndItemId(orderId, itemId);
+        if (reservationOpt.isEmpty()) {
+            log.warn("No matching reservation found for restore: orderId={}, itemId={} — "
+                    + "rejecting to prevent inventory inflation", orderId, itemId);
+            throw new IllegalArgumentException(
+                    "No matching inventory reservation found for orderId=" + orderId
+                            + " and itemId=" + itemId
+                            + ". Restore rejected to prevent inventory inflation.");
+        }
+
         Optional<Inventory> inventoryOpt = inventoryRepository.findById(itemId);
         if (inventoryOpt.isPresent()) {
             Inventory inventory = inventoryOpt.orElseThrow();
@@ -205,12 +220,10 @@ public class InventoryService {
 
             // Remove the reservation record so that a future retry of the same order
             // does not find a stale reservation and skip the decrement.
-            reservationRepository.findByOrderIdAndItemId(orderId, itemId)
-                    .ifPresent(reservation -> {
-                        reservationRepository.delete(reservation);
-                        log.info("Removed reservation record for order {} item {} during compensation",
-                                orderId, itemId);
-                    });
+            InventoryReservation reservation = reservationOpt.get();
+            reservationRepository.delete(reservation);
+            log.info("Removed reservation record for order {} item {} during compensation",
+                    orderId, itemId);
         } else {
             log.error("Cannot restore inventory for item {}: inventory record not found", itemId);
             throw new IllegalStateException("Inventory record not found for item: " + itemId);
