@@ -24,151 +24,319 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+import com.jpetstore.order.client.AccountServiceClient;
+import com.jpetstore.order.client.CatalogServiceClient;
 import com.jpetstore.order.dto.CartDTO;
 import com.jpetstore.order.dto.CartItemDTO;
 import com.jpetstore.order.dto.OrderDTO;
 import com.jpetstore.order.dto.OrderRequest;
+import com.jpetstore.order.entity.CartState;
 import com.jpetstore.order.entity.LineItem;
 import com.jpetstore.order.entity.Order;
+import com.jpetstore.order.entity.OrderStatus;
+import com.jpetstore.order.repository.LineItemRepository;
 import com.jpetstore.order.repository.OrderRepository;
+import com.jpetstore.order.repository.OrderStatusRepository;
 import com.jpetstore.order.saga.OrderSagaOrchestrator;
 
 /**
- * Business-logic service for the Order bounded context.
+ * Primary business logic service for the Order Service microservice.
  *
- * <p>This class replaces the monolith's {@code org.mybatis.jpetstore.service.OrderService},
- * reimplemented on top of Spring Data JPA and the distributed Saga orchestration
- * pattern for cross-service inventory management.</p>
+ * <p>This class replaces the monolith's {@code org.mybatis.jpetstore.service.OrderService}
+ * (133 lines) with a Spring Boot 3 service that uses JPA repositories instead of
+ * MyBatis mappers, delegates distributed transactions to the Saga pattern via
+ * {@link OrderSagaOrchestrator}, and retrieves cart state from Redis via
+ * {@link CartStateService}.</p>
  *
- * <h3>Key responsibilities</h3>
+ * <h3>Key Transformation Differences from Monolith</h3>
  * <ul>
- *   <li><strong>Order creation</strong>: Converts an {@link OrderRequest} DTO into an
- *       {@link Order} entity, populates line items from the externalized cart state,
- *       and delegates to {@link OrderSagaOrchestrator#executeOrderSaga(Order)} for
- *       the distributed transaction (CREATE_ORDER → RESERVE_INVENTORY → CONFIRM_ORDER).</li>
- *   <li><strong>Order retrieval</strong>: Loads individual orders or order lists via
- *       {@link OrderRepository}, converting entities to {@link OrderDTO} for API responses.</li>
+ *   <li><b>JPA Repositories</b> replace MyBatis Mappers ({@code OrderMapper},
+ *       {@code LineItemMapper}, {@code SequenceMapper}, {@code ItemMapper})</li>
+ *   <li><b>PostgreSQL sequence</b> ({@code order_id_seq}) replaces the non-thread-safe
+ *       {@code getNextId("ordernum")} read-then-update pattern (AAP Section 0.7.3)</li>
+ *   <li><b>Saga pattern</b> via {@link OrderSagaOrchestrator} replaces the monolith's
+ *       single {@code @Transactional} boundary that spanned Order and Catalog tables</li>
+ *   <li><b>{@link OrderRequest} DTO</b> replaces the monolith's pattern of receiving
+ *       a pre-populated {@code Order} domain object from the ActionBean</li>
+ *   <li><b>Redis cart state</b> via {@link CartStateService} replaces the session-scoped
+ *       {@code CartActionBean}</li>
+ *   <li><b>Account verification</b> via {@link AccountServiceClient} replaces the
+ *       session-based authenticated check in {@code OrderActionBean.newOrderForm()}</li>
  * </ul>
  *
- * <h3>Monolith method mapping</h3>
- * <table>
- *   <tr><th>Monolith Method</th><th>This Service Method</th><th>Differences</th></tr>
- *   <tr><td>{@code insertOrder(Order)}</td><td>{@link #createOrder(OrderRequest)}</td>
- *       <td>Accepts DTO instead of domain object; delegates to Saga orchestrator
- *       instead of single @Transactional method</td></tr>
- *   <tr><td>{@code getOrder(int)}</td><td>{@link #getOrderById(int)}</td>
- *       <td>Returns Optional of DTO instead of entity; uses Spring Data JPA</td></tr>
- *   <tr><td>{@code getOrdersByUsername(String)}</td><td>{@link #getOrdersByUsername(String)}</td>
- *       <td>Returns List of DTOs; uses derived query method</td></tr>
- * </table>
+ * <h3>Eliminated Monolith Patterns</h3>
+ * <ul>
+ *   <li>{@code getNextId(String)} method — eliminated entirely; PostgreSQL sequences
+ *       provide thread-safe, atomic ID generation via {@code @GeneratedValue}</li>
+ *   <li>{@code SequenceMapper} dependency — the {@code sequence} table is not migrated</li>
+ *   <li>{@code ItemMapper} dependency — inventory operations go through
+ *       {@link CatalogServiceClient} REST calls, coordinated by the Saga</li>
+ *   <li>Direct {@code @Transactional} on {@code insertOrder()} — the distributed
+ *       transaction is handled by the Saga orchestrator; only read methods use
+ *       {@code @Transactional(readOnly = true)}</li>
+ * </ul>
+ *
+ * <h3>Cross-Service Communication</h3>
+ * <p>Per AAP Section 0.8.1: "No service may access another service's database directly."
+ * All cross-service data access goes through REST clients:
+ * {@link AccountServiceClient} for user verification and
+ * {@link CatalogServiceClient} for item detail enrichment.</p>
  *
  * @author Blitzy Platform
  * @see OrderSagaOrchestrator
- * @see OrderRepository
+ * @see CartStateService
+ * @see AccountServiceClient
+ * @see CatalogServiceClient
  */
 @Service
 public class OrderService {
 
     private static final Logger log = LoggerFactory.getLogger(OrderService.class);
 
+    /** Spring Data JPA repository for Order entity. Used for read-only queries. */
     private final OrderRepository orderRepository;
-    private final OrderSagaOrchestrator sagaOrchestrator;
+
+    /** Spring Data JPA repository for OrderStatus entity. Used for status record queries. */
+    private final OrderStatusRepository orderStatusRepository;
+
+    /** Spring Data JPA repository for LineItem entity. Used for explicit line item loading. */
+    private final LineItemRepository lineItemRepository;
+
+    /** Saga coordinator for distributed order transactions. */
+    private final OrderSagaOrchestrator orderSagaOrchestrator;
+
+    /** Redis-backed cart state management service. */
     private final CartStateService cartStateService;
 
+    /** REST client for Catalog Service (item details, inventory operations). */
+    private final CatalogServiceClient catalogServiceClient;
+
+    /** REST client for Account Service (user verification). */
+    private final AccountServiceClient accountServiceClient;
+
     /**
-     * Constructs the order service with all required dependencies.
+     * Constructs the OrderService with all 7 required dependencies injected via
+     * Spring constructor injection.
      *
-     * @param orderRepository   Spring Data JPA repository for Order entities
-     * @param sagaOrchestrator  Saga orchestrator for distributed order transactions
-     * @param cartStateService  service for externalized cart state management
+     * <p>All dependencies are injected through a single constructor, following
+     * Spring best practices for immutable service design. No {@code @Autowired}
+     * annotation is needed because Spring automatically detects the single
+     * constructor.</p>
+     *
+     * @param orderRepository       Spring Data JPA repository for Order entity
+     * @param orderStatusRepository Spring Data JPA repository for OrderStatus entity
+     * @param lineItemRepository    Spring Data JPA repository for LineItem entity
+     * @param orderSagaOrchestrator Saga coordinator for distributed order transactions
+     * @param cartStateService      Redis-backed cart state management service
+     * @param catalogServiceClient  REST client for Catalog Service communication
+     * @param accountServiceClient  REST client for Account Service communication
      */
     public OrderService(OrderRepository orderRepository,
-                        OrderSagaOrchestrator sagaOrchestrator,
-                        CartStateService cartStateService) {
+                        OrderStatusRepository orderStatusRepository,
+                        LineItemRepository lineItemRepository,
+                        OrderSagaOrchestrator orderSagaOrchestrator,
+                        CartStateService cartStateService,
+                        CatalogServiceClient catalogServiceClient,
+                        AccountServiceClient accountServiceClient) {
         this.orderRepository = orderRepository;
-        this.sagaOrchestrator = sagaOrchestrator;
+        this.orderStatusRepository = orderStatusRepository;
+        this.lineItemRepository = lineItemRepository;
+        this.orderSagaOrchestrator = orderSagaOrchestrator;
         this.cartStateService = cartStateService;
+        this.catalogServiceClient = catalogServiceClient;
+        this.accountServiceClient = accountServiceClient;
     }
 
+    // -----------------------------------------------------------------------
+    // Public Methods (Schema exports: insertOrder, getOrder, getOrdersByUsername)
+    // -----------------------------------------------------------------------
+
     /**
-     * Creates a new order by converting the request DTO into an Order entity,
-     * populating line items from the externalized cart, and executing the
-     * Saga orchestration flow.
+     * Places a new order, orchestrating the distributed transaction via the Saga pattern.
      *
-     * <p>The Saga flow (per AAP §0.7.1):</p>
+     * <p>Replaces the monolith's {@code OrderService.insertOrder(Order)} (lines 59-77)
+     * which executed 2N+4 SQL operations in a single {@code @Transactional} boundary.
+     * In the microservice, the distributed transaction is delegated to
+     * {@link OrderSagaOrchestrator#executeOrderSaga(Order)}.</p>
+     *
+     * <h4>Processing Flow</h4>
      * <ol>
-     *   <li>CREATE_ORDER: Persist the order with PENDING status</li>
-     *   <li>RESERVE_INVENTORY: Call Catalog Service to decrement inventory</li>
-     *   <li>CONFIRM_ORDER: Update status to CONFIRMED (or FAILED on error)</li>
+     *   <li>Verify user exists via {@link AccountServiceClient#accountExists(String)}</li>
+     *   <li>Retrieve cart contents from Redis via {@link CartStateService#getCart(String)}</li>
+     *   <li>Validate cart is not empty</li>
+     *   <li>Convert cart items to {@link CartState.CartItemData} for internal processing</li>
+     *   <li>Construct {@link Order} entity from {@link OrderRequest} fields and cart items</li>
+     *   <li>Delegate to {@link OrderSagaOrchestrator#executeOrderSaga(Order)} for:
+     *       local order write (PENDING), inventory decrement via Catalog Service,
+     *       and status confirmation (CONFIRMED/FAILED)</li>
+     *   <li>Clear cart via {@link CartStateService#clearCart(String)} on success</li>
+     *   <li>Convert saved Order to {@link OrderDTO} and return</li>
      * </ol>
      *
-     * @param request the validated order request DTO
-     * @return the completed order as an {@link OrderDTO}
-     * @throws IllegalArgumentException if the cart is empty or not found
+     * <h4>Order-First Write (AAP Section 0.7.1)</h4>
+     * <p>The order record is written first in PENDING state so that there is always
+     * a durable record of the attempt. This prevents "phantom decrements" where
+     * inventory is reserved but no order record exists.</p>
+     *
+     * @param request the order creation request containing username, addresses,
+     *                payment info, and cart session ID for externalized cart reference
+     * @return the created order as an {@link OrderDTO}
+     * @throws RuntimeException if user account not found, cart is empty, or
+     *                          saga execution fails
      */
-    public OrderDTO createOrder(OrderRequest request) {
-        log.info("Creating order for user: {}, cartSessionId: {}",
+    public OrderDTO insertOrder(OrderRequest request) {
+        log.info("Processing order for user: {}, cartSessionId: {}",
                 request.getUsername(), request.getCartSessionId());
 
-        // Build the Order entity from the request DTO
-        Order order = buildOrderFromRequest(request);
+        // Step 1: Verify user exists via Account Service REST call.
+        // Replaces the monolith's session-based account lookup in OrderActionBean.newOrderForm()
+        if (!accountServiceClient.accountExists(request.getUsername())) {
+            log.error("Order rejected: account not found for username: {}", request.getUsername());
+            throw new IllegalStateException("Account not found for username: " + request.getUsername());
+        }
+        log.debug("Account verified for user: {}", request.getUsername());
 
-        // Populate line items from the externalized cart state
-        populateLineItemsFromCart(order, request.getCartSessionId());
+        // Step 2: Retrieve cart contents from Redis via CartStateService.
+        // Replaces the monolith's session-scoped CartActionBean
+        CartDTO cart = cartStateService.getCart(request.getCartSessionId());
+        if (cart == null || cart.getItems() == null || cart.getItems().isEmpty()) {
+            log.error("Order rejected: cart is empty or not found for session: {}",
+                    request.getCartSessionId());
+            throw new IllegalStateException(
+                    "Cart is empty or not found for session: " + request.getCartSessionId());
+        }
+        List<CartItemDTO> dtoItems = cart.getItems();
+        log.debug("Retrieved {} items from cart session: {}",
+                dtoItems.size(), request.getCartSessionId());
 
-        if (order.getLineItems().isEmpty()) {
-            throw new IllegalArgumentException(
-                    "Cannot create order: cart is empty for session " + request.getCartSessionId());
+        // Step 3: Convert CartItemDTO objects to CartState.CartItemData for internal processing.
+        // CartState.CartItemData is the canonical model for cart items within the order service,
+        // matching the underlying Redis hash entity structure (itemId, quantity, unitPrice).
+        List<CartState.CartItemData> cartItems = new ArrayList<>();
+        for (CartItemDTO dto : dtoItems) {
+            CartState.CartItemData data = new CartState.CartItemData();
+            data.setItemId(dto.getItemId());
+            data.setQuantity(dto.getQuantity());
+            data.setUnitPrice(dto.getUnitPrice());
+            cartItems.add(data);
         }
 
-        // Calculate total price from line items
-        BigDecimal totalPrice = order.getLineItems().stream()
-                .map(li -> li.getUnitPrice().multiply(BigDecimal.valueOf(li.getQuantity())))
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        order.setTotalPrice(totalPrice);
+        // Step 4: Build Order entity from request DTO and cart items
+        Order order = buildOrderFromRequest(request, cartItems);
+        log.debug("Order entity built: username={}, totalPrice={}, lineItems={}",
+                order.getUsername(), order.getTotalPrice(), order.getLineItems().size());
 
-        // Execute the 3-step Saga: CREATE_ORDER → RESERVE_INVENTORY → CONFIRM_ORDER
-        Order resultOrder = sagaOrchestrator.executeOrderSaga(order);
+        // Step 5: Delegate to Saga orchestrator for distributed transaction.
+        // The orchestrator handles: local order write (PENDING) -> inventory decrement
+        // via Catalog Service REST -> confirmation (CONFIRMED/FAILED)
+        Order savedOrder = orderSagaOrchestrator.executeOrderSaga(order);
+        log.info("Order saga completed: orderId={}, status={}",
+                savedOrder.getOrderId(), savedOrder.getStatus());
 
-        log.info("Order saga completed for user: {}, orderId: {}, status: {}",
-                resultOrder.getUsername(), resultOrder.getOrderId(), resultOrder.getStatus());
+        // Step 6: Clear cart after successful order placement.
+        // Replaces the monolith's CartActionBean.clear() called in OrderActionBean
+        cartStateService.clearCart(request.getCartSessionId());
+        log.debug("Cart cleared for session: {}", request.getCartSessionId());
 
-        return convertToDTO(resultOrder);
+        // Step 7: Convert and return
+        OrderDTO result = convertToDTO(savedOrder);
+        log.info("Order successfully placed: orderId={}, username={}, totalPrice={}",
+                result.getOrderId(), result.getUsername(), result.getTotalPrice());
+        return result;
     }
 
     /**
-     * Retrieves a single order by its primary key.
+     * Retrieves a single order by its ID.
      *
-     * <p>Replaces the monolith's {@code OrderService.getOrder(int orderId)} method,
-     * which JOINed orders with orderstatus. In the microservice architecture,
-     * the Order entity has its own status column for the Saga state.</p>
+     * <p>Replaces the monolith's {@code OrderService.getOrder(int)} (lines 87-99).
+     * In the monolith, line items were loaded separately via
+     * {@code lineItemMapper.getLineItemsByOrderId()} and each line item was enriched
+     * with item details via {@code itemMapper.getItem()}. In the microservice,
+     * line items are explicitly loaded via {@link LineItemRepository} for deterministic
+     * behavior, and optional item enrichment is performed via
+     * {@link CatalogServiceClient} for operational visibility.</p>
      *
-     * @param orderId the order identifier
-     * @return the order as an {@link OrderDTO}, or {@code null} if not found
+     * @param orderId the order identifier to look up
+     * @return the order as an {@link OrderDTO}
+     * @throws RuntimeException if the order is not found
      */
-    public OrderDTO getOrderById(int orderId) {
-        log.debug("Retrieving order by id: {}", orderId);
-        return orderRepository.findById(orderId)
-                .map(this::convertToDTO)
-                .orElse(null);
+    @Transactional(readOnly = true)
+    public OrderDTO getOrder(int orderId) {
+        log.debug("Retrieving order: orderId={}", orderId);
+
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> {
+                    log.error("Order not found: orderId={}", orderId);
+                    return new RuntimeException("Order not found: " + orderId);
+                });
+
+        // Explicitly load line items via repository to avoid lazy-loading issues
+        // outside transactional context. Uses LineItemRepository.findByOrderId(int).
+        List<LineItem> lineItems = lineItemRepository.findByOrderId(orderId);
+        order.setLineItems(lineItems);
+
+        // Load order status records for operational visibility.
+        // Uses OrderStatusRepository.findByOrderId(int) and OrderStatus getters.
+        List<OrderStatus> statusRecords = orderStatusRepository.findByOrderId(orderId);
+        if (!statusRecords.isEmpty()) {
+            OrderStatus latestStatus = statusRecords.get(0);
+            log.debug("Order {} has {} status records, latest: lineNum={}, status={}, timestamp={}",
+                    orderId, statusRecords.size(),
+                    latestStatus.getLineNum(), latestStatus.getStatus(),
+                    latestStatus.getTimestamp());
+        }
+
+        // Optional enrichment: log catalog item details for each line item.
+        // Replicates monolith OrderService.getOrder() lines 93-95 where
+        // itemMapper.getItem() and itemMapper.getInventoryQuantity() were called.
+        // In the microservice, this data comes from Catalog Service REST API.
+        // Uses CatalogServiceClient.getItem(String) for cross-service enrichment.
+        for (LineItem lineItem : lineItems) {
+            try {
+                catalogServiceClient.getItem(lineItem.getItemId()).ifPresent(itemData ->
+                        log.debug("Line item {} enriched: catalog data available for itemId={}",
+                                lineItem.getLineNum(), lineItem.getItemId()));
+            } catch (Exception e) {
+                // Graceful degradation per AAP Section 0.7.4: when Catalog Service is
+                // unavailable, the order is still returned with line item data but without
+                // catalog enrichment. A warning is logged for operational visibility.
+                log.warn("Failed to enrich line item {} (itemId={}) with catalog data: {}",
+                        lineItem.getLineNum(), lineItem.getItemId(), e.getMessage());
+            }
+        }
+
+        OrderDTO dto = convertToDTO(order);
+        log.debug("Order retrieved: orderId={}, username={}, lineItems={}",
+                dto.getOrderId(), dto.getUsername(),
+                dto.getLineItems() != null ? dto.getLineItems().size() : 0);
+        return dto;
     }
 
     /**
-     * Retrieves all orders for a specific user, sorted by order date descending.
+     * Retrieves all orders for a given username, ordered by date descending.
      *
      * <p>Replaces the monolith's {@code OrderService.getOrdersByUsername(String)}
-     * method. Returns an empty list if no orders exist for the username.</p>
+     * (lines 109-111) which delegated to {@code orderMapper.getOrdersByUsername()}.
+     * The repository method {@code findByUsernameOrderByOrderDateDesc()} preserves
+     * the monolith's ORDER BY ORDERDATE descending sort order.</p>
      *
-     * @param username the username to search for
-     * @return list of orders as {@link OrderDTO} objects
+     * @param username the username to query orders for
+     * @return a list of {@link OrderDTO}s, ordered by date descending (may be empty)
      */
+    @Transactional(readOnly = true)
     public List<OrderDTO> getOrdersByUsername(String username) {
         log.debug("Retrieving orders for user: {}", username);
+
         List<Order> orders = orderRepository.findByUsernameOrderByOrderDateDesc(username);
-        return orders.stream()
+
+        List<OrderDTO> result = orders.stream()
                 .map(this::convertToDTO)
                 .collect(Collectors.toList());
+
+        log.debug("Found {} orders for user: {}", result.size(), username);
+        return result;
     }
 
     // -----------------------------------------------------------------------
@@ -176,19 +344,49 @@ public class OrderService {
     // -----------------------------------------------------------------------
 
     /**
-     * Builds an Order entity from the request DTO, mapping all address,
-     * payment, and metadata fields.
+     * Builds an Order entity from the OrderRequest DTO and cart items.
      *
-     * <p>This replaces the monolith's {@code Order.initOrder(Account, Cart)} method,
-     * which copied account data into order fields. In the microservice, the client
-     * sends all necessary data in the request DTO.</p>
+     * <p>Replicates the monolith's {@code Order.initOrder(Account, Cart)} method
+     * (lines 286-323) which populates all order fields from account data and cart
+     * contents. In the microservice, the request DTO carries all field values
+     * (addresses, payment info) and cart items are retrieved from Redis.</p>
+     *
+     * <h4>Field Mapping from OrderRequest</h4>
+     * <ul>
+     *   <li>Username, shipping/billing addresses, payment info from request</li>
+     *   <li>{@code orderDate} = {@code LocalDateTime.now()} (replaces monolith's
+     *       {@code new Date()} on line 288)</li>
+     *   <li>{@code status} = "PENDING" (Saga initial state per AAP Section 0.7.1)</li>
+     *   <li>{@code totalPrice} computed from cart items using BigDecimal reduction
+     *       (matching monolith's {@code Cart.getSubTotal()}, lines 119-123)</li>
+     * </ul>
+     *
+     * <h4>LineItem Construction</h4>
+     * <p>For each cart item, a {@link LineItem} is created with:</p>
+     * <ul>
+     *   <li>{@code lineNum} = index + 1 (1-based, matching monolith's
+     *       {@code new LineItem(lineItems.size() + 1, cartItem)} on line 327)</li>
+     *   <li>{@code itemId} from {@link CartState.CartItemData#getItemId()}</li>
+     *   <li>{@code quantity} from {@link CartState.CartItemData#getQuantity()}</li>
+     *   <li>{@code unitPrice} from {@link CartState.CartItemData#getUnitPrice()}</li>
+     * </ul>
+     *
+     * @param request   the order creation request with addresses and payment info
+     * @param cartItems the cart items converted from Redis cart state
+     * @return a fully populated Order entity ready for Saga execution
      */
-    private Order buildOrderFromRequest(OrderRequest request) {
+    private Order buildOrderFromRequest(OrderRequest request,
+                                        List<CartState.CartItemData> cartItems) {
         Order order = new Order();
+
+        // Set username and timestamp (replicating Order.initOrder line 287-288)
         order.setUsername(request.getUsername());
         order.setOrderDate(LocalDateTime.now());
+        order.setStatus("PENDING");
 
-        // Shipping address
+        // Set shipping address (replicating Order.initOrder lines 289-295)
+        order.setShipToFirstName(request.getShipToFirstName());
+        order.setShipToLastName(request.getShipToLastName());
         order.setShipAddress1(request.getShipAddress1());
         order.setShipAddress2(request.getShipAddress2());
         order.setShipCity(request.getShipCity());
@@ -196,7 +394,9 @@ public class OrderService {
         order.setShipZip(request.getShipZip());
         order.setShipCountry(request.getShipCountry());
 
-        // Billing address
+        // Set billing address (replicating Order.initOrder lines 297-303)
+        order.setBillToFirstName(request.getBillToFirstName());
+        order.setBillToLastName(request.getBillToLastName());
         order.setBillAddress1(request.getBillAddress1());
         order.setBillAddress2(request.getBillAddress2());
         order.setBillCity(request.getBillCity());
@@ -204,80 +404,66 @@ public class OrderService {
         order.setBillZip(request.getBillZip());
         order.setBillCountry(request.getBillCountry());
 
-        // Payment
+        // Set payment information (replicating Order.initOrder lines 305-311)
         order.setCreditCard(request.getCreditCard());
         order.setExpiryDate(request.getExpiryDate());
         order.setCardType(request.getCardType());
-
-        // Names
-        order.setBillToFirstName(request.getBillToFirstName());
-        order.setBillToLastName(request.getBillToLastName());
-        order.setShipToFirstName(request.getShipToFirstName());
-        order.setShipToLastName(request.getShipToLastName());
-
-        // Miscellaneous
         order.setCourier(request.getCourier());
         order.setLocale(request.getLocale());
 
-        return order;
-    }
+        // Compute totalPrice — CRITICAL: exact BigDecimal replication of
+        // monolith Cart.getSubTotal() (lines 119-123):
+        //   unitPrice.multiply(new BigDecimal(quantity)) reduced with BigDecimal::add
+        // Uses CartState.CartItemData.getUnitPrice() and CartItemData.getQuantity()
+        BigDecimal totalPrice = cartItems.stream()
+                .map(item -> item.getUnitPrice().multiply(new BigDecimal(item.getQuantity())))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        order.setTotalPrice(totalPrice);
 
-    /**
-     * Populates the order's line items from the externalized cart state.
-     *
-     * <p>Retrieves the cart from Redis-backed CartStateService and converts each
-     * cart item into a LineItem entity. Line numbers are assigned sequentially
-     * starting from 1, matching the monolith's convention.</p>
-     *
-     * @param order             the Order entity to populate
-     * @param cartSessionId     the cart identifier (session ID or username)
-     * @throws IllegalArgumentException if the cart is not found
-     */
-    private void populateLineItemsFromCart(Order order, String cartSessionId) {
-        CartDTO cart;
-        try {
-            cart = cartStateService.getCart(cartSessionId);
-        } catch (Exception e) {
-            log.warn("Failed to retrieve cart for session {}: {}", cartSessionId, e.getMessage());
-            throw new IllegalArgumentException(
-                    "Cart not found for session: " + cartSessionId);
-        }
-
-        if (cart == null || cart.getItems() == null || cart.getItems().isEmpty()) {
-            log.warn("Cart is empty for session: {}", cartSessionId);
-            return;
-        }
-
-        List<LineItem> lineItems = new ArrayList<>();
-        int lineNum = 1;
-        for (CartItemDTO cartItem : cart.getItems()) {
+        // Build LineItem entities from cart items and add them to the order.
+        // Uses Order.addLineItem(LineItem) — the convenience method that appends
+        // to the @OneToMany collection, enabling JPA cascade on save.
+        // 1-based lineNumber matching monolith: new LineItem(lineItems.size() + 1, cartItem)
+        // Uses CartState.CartItemData.getItemId(), getQuantity(), getUnitPrice()
+        for (int i = 0; i < cartItems.size(); i++) {
+            CartState.CartItemData cartItem = cartItems.get(i);
             LineItem lineItem = new LineItem();
-            lineItem.setLineNum(lineNum);
+            lineItem.setLineNum(i + 1); // 1-based sequencing per monolith convention
             lineItem.setItemId(cartItem.getItemId());
             lineItem.setQuantity(cartItem.getQuantity());
-            lineItem.setUnitPrice(cartItem.getUnitPrice() != null
-                    ? cartItem.getUnitPrice() : BigDecimal.ZERO);
-            lineItems.add(lineItem);
-            lineNum++;
+            lineItem.setUnitPrice(cartItem.getUnitPrice());
+            order.addLineItem(lineItem);
         }
 
-        order.setLineItems(lineItems);
+        log.debug("Built order from request: username={}, totalPrice={}, lineItemCount={}",
+                request.getUsername(), totalPrice, cartItems.size());
+        return order;
     }
 
     /**
      * Converts an Order entity to an OrderDTO for REST API responses.
      *
-     * <p>Maps all entity fields to the DTO, including line item details.
-     * Handles lazy-loaded lineItems collection by safely accessing it
-     * within the transactional context.</p>
+     * <p>Maps all 27+ fields from the Order entity and its associated
+     * LineItem entities to the OrderDTO structure. For each LineItem,
+     * creates an {@link OrderDTO.LineItemDetail} with line number, item ID,
+     * quantity, unit price, and computed total (unitPrice x quantity).</p>
+     *
+     * @param order the Order entity to convert
+     * @return the populated OrderDTO
      */
     private OrderDTO convertToDTO(Order order) {
         OrderDTO dto = new OrderDTO();
+
+        // Core fields
         dto.setOrderId(order.getOrderId());
         dto.setUsername(order.getUsername());
         dto.setOrderDate(order.getOrderDate());
+        dto.setTotalPrice(order.getTotalPrice());
+        dto.setStatus(order.getStatus());
 
         // Shipping address
+        dto.setShipToFirstName(order.getShipToFirstName());
+        dto.setShipToLastName(order.getShipToLastName());
         dto.setShipAddress1(order.getShipAddress1());
         dto.setShipAddress2(order.getShipAddress2());
         dto.setShipCity(order.getShipCity());
@@ -286,6 +472,8 @@ public class OrderService {
         dto.setShipCountry(order.getShipCountry());
 
         // Billing address
+        dto.setBillToFirstName(order.getBillToFirstName());
+        dto.setBillToLastName(order.getBillToLastName());
         dto.setBillAddress1(order.getBillAddress1());
         dto.setBillAddress2(order.getBillAddress2());
         dto.setBillCity(order.getBillCity());
@@ -293,45 +481,27 @@ public class OrderService {
         dto.setBillZip(order.getBillZip());
         dto.setBillCountry(order.getBillCountry());
 
-        // Payment
+        // Payment info
         dto.setCreditCard(order.getCreditCard());
         dto.setExpiryDate(order.getExpiryDate());
         dto.setCardType(order.getCardType());
-
-        // Names
-        dto.setBillToFirstName(order.getBillToFirstName());
-        dto.setBillToLastName(order.getBillToLastName());
-        dto.setShipToFirstName(order.getShipToFirstName());
-        dto.setShipToLastName(order.getShipToLastName());
-
-        // Miscellaneous
         dto.setCourier(order.getCourier());
-        dto.setTotalPrice(order.getTotalPrice());
         dto.setLocale(order.getLocale());
-        dto.setStatus(order.getStatus());
 
-        // Line items
-        try {
-            List<LineItem> lineItems = order.getLineItems();
-            if (lineItems != null) {
-                List<OrderDTO.LineItemDetail> lineItemDetails = lineItems.stream()
-                        .map(li -> {
-                            OrderDTO.LineItemDetail detail = new OrderDTO.LineItemDetail();
-                            detail.setLineNumber(li.getLineNum());
-                            detail.setItemId(li.getItemId());
-                            detail.setQuantity(li.getQuantity());
-                            detail.setUnitPrice(li.getUnitPrice());
-                            detail.setTotal(li.getTotal());
-                            return detail;
-                        })
-                        .collect(Collectors.toList());
-                dto.setLineItems(lineItemDetails);
+        // Line items — map each LineItem entity to OrderDTO.LineItemDetail
+        List<OrderDTO.LineItemDetail> lineItemDetails = new ArrayList<>();
+        if (order.getLineItems() != null) {
+            for (LineItem lineItem : order.getLineItems()) {
+                OrderDTO.LineItemDetail detail = new OrderDTO.LineItemDetail();
+                detail.setLineNumber(lineItem.getLineNum());
+                detail.setItemId(lineItem.getItemId());
+                detail.setQuantity(lineItem.getQuantity());
+                detail.setUnitPrice(lineItem.getUnitPrice());
+                detail.setTotal(lineItem.getTotal()); // computed: unitPrice x quantity
+                lineItemDetails.add(detail);
             }
-        } catch (Exception e) {
-            // Lazy-loading may fail outside transactional context for list queries;
-            // line items are omitted in that case (they can be fetched via getOrderById)
-            log.debug("Could not load line items for order {}: {}", order.getOrderId(), e.getMessage());
         }
+        dto.setLineItems(lineItemDetails);
 
         return dto;
     }
