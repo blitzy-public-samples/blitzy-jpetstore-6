@@ -121,17 +121,11 @@ Replaces the monolith's `AccountActionBean.signon()` which called `accountServic
 
 **Error Response** — `401 Unauthorized`:
 
-```json
-{
-  "timestamp": "2025-01-15T10:30:00Z",
-  "status": 401,
-  "error": "Unauthorized",
-  "message": "Invalid username or password.  Signon failed.",
-  "path": "/api/accounts/signon"
-}
+```
+Invalid username or password
 ```
 
-> **Important**: The error message preserves the exact wording from `AccountActionBean.signon()` line 164, including the double space between "password." and "Signon".
+> **Note**: The 401 response is a **plain text** body (not JSON). The error message is returned directly as a string by the Account Service controller. The `Content-Type` header is `text/plain`.
 
 ---
 
@@ -175,17 +169,13 @@ Replaces the monolith's `accountService.getAccount(username)` (single-argument o
 
 > **Field mapping**: Response field names match the `Account.java` domain POJO property names exactly. The `bannerName` value comes from the `bannerdata` table joined via `favouriteCategoryId`.
 
-**Error Response** — `404 Not Found`:
+**Error Responses**:
 
-```json
-{
-  "timestamp": "2025-01-15T10:30:00Z",
-  "status": 404,
-  "error": "Not Found",
-  "message": "Account not found",
-  "path": "/api/accounts/unknownuser"
-}
-```
+- `403 Forbidden` — Attempting to access another user's account:
+  > The authorization check runs before the existence check. If the authenticated user requests a different user's account, a `403 Forbidden` response is returned regardless of whether the target account exists.
+
+- `404 Not Found` — Account does not exist (only returned when the authenticated user requests their own non-existent account, which is an edge case):
+  > In practice, a `403` is the more common error for mismatched usernames. A `404` is only possible if the user's own token references an account that has been deleted.
 
 ---
 
@@ -221,17 +211,31 @@ Replaces the monolith's `AccountActionBean.newAccount()` which called `accountSe
 }
 ```
 
-**Success Response** — `201 Created` (`SignonResponse`):
+**Success Response** — `201 Created` (`AccountDTO`):
 
 ```json
 {
-  "token": "string (JWT)",
   "username": "string",
-  "email": "string"
+  "email": "string",
+  "firstName": "string",
+  "lastName": "string",
+  "status": "string",
+  "address1": "string",
+  "address2": "string | null",
+  "city": "string",
+  "state": "string",
+  "zip": "string",
+  "country": "string",
+  "phone": "string",
+  "languagePreference": "string",
+  "favouriteCategoryId": "string | null",
+  "listOption": true,
+  "bannerOption": true,
+  "bannerName": "string | null"
 }
 ```
 
-> **Auto-login**: The response includes a JWT token so the user is automatically authenticated after registration, matching the monolith behavior where `authenticated = true` is set after `insertAccount()` (see `AccountActionBean.newAccount()` line 119). Full account details can be retrieved separately via `GET /api/accounts/{username}`.
+> **Note**: Registration returns the created `AccountDTO` (not a JWT token). To authenticate after registration, the client must call `POST /api/accounts/signon` separately to obtain a JWT token. The password is never included in the response.
 
 **Error Responses**:
 
@@ -246,20 +250,16 @@ Replaces the monolith's `AccountActionBean.newAccount()` which called `accountSe
   }
   ```
 
-- `400 Bad Request` — Validation errors:
+- `400 Bad Request` — Validation errors (Spring Boot default format):
   ```json
   {
-    "timestamp": "2025-01-15T10:30:00Z",
+    "timestamp": "2025-01-15T10:30:00.000+00:00",
     "status": 400,
     "error": "Bad Request",
-    "message": "Validation failed",
-    "path": "/api/accounts",
-    "fieldErrors": [
-      { "field": "firstName", "message": "must not be blank" },
-      { "field": "lastName", "message": "must not be blank" }
-    ]
+    "path": "/api/accounts"
   }
   ```
+  > **Note**: The 400 response uses Spring Boot's default `BasicErrorController` format. Individual field validation errors are **not** included as a separate `fieldErrors` array; the `message` field may be absent or contain a generic validation message depending on the Spring Boot error handling configuration.
 
 **Transactional Behavior**: The insert is a 3-table atomic transaction matching `AccountService.insertAccount()`:
 1. `accountMapper.insertAccount(account)` — inserts into the `account` table
@@ -420,15 +420,7 @@ Replaces the monolith's `catalogService.getCategory(categoryId)`.
 
 **Error Response** — `404 Not Found`:
 
-```json
-{
-  "timestamp": "2025-01-15T10:30:00Z",
-  "status": 404,
-  "error": "Not Found",
-  "message": "Category not found",
-  "path": "/api/categories/UNKNOWN"
-}
-```
+> The Catalog Service returns a `404` status code with an **empty response body** when the category is not found. No JSON error object is included.
 
 ---
 
@@ -498,15 +490,7 @@ Replaces the monolith's `catalogService.getProduct(productId)`.
 
 **Error Response** — `404 Not Found`:
 
-```json
-{
-  "timestamp": "2025-01-15T10:30:00Z",
-  "status": 404,
-  "error": "Not Found",
-  "message": "Product not found",
-  "path": "/api/products/UNKNOWN"
-}
-```
+> The Catalog Service returns a `404` status code with an **empty response body** when the product is not found. No JSON error object is included.
 
 ---
 
@@ -639,15 +623,7 @@ Replaces the monolith's `catalogService.getItem(itemId)`.
 
 **Error Response** — `404 Not Found`:
 
-```json
-{
-  "timestamp": "2025-01-15T10:30:00Z",
-  "status": 404,
-  "error": "Not Found",
-  "message": "Item not found",
-  "path": "/api/items/UNKNOWN"
-}
-```
+> The Catalog Service returns a `404` status code with an **empty response body** when the item is not found. No JSON error object is included.
 
 ---
 
@@ -679,15 +655,7 @@ Replaces the monolith's `catalogService.isItemInStock(itemId)` which calls `item
 
 **Error Response** — `404 Not Found`:
 
-```json
-{
-  "timestamp": "2025-01-15T10:30:00Z",
-  "status": 404,
-  "error": "Not Found",
-  "message": "Item not found",
-  "path": "/api/items/UNKNOWN/inventory"
-}
-```
+> The Catalog Service returns a `404` status code with an **empty response body** when the item is not found. No JSON error object is included.
 
 ---
 
@@ -697,7 +665,7 @@ Replaces the monolith's `catalogService.isItemInStock(itemId)` which calls `item
 
 Replaces the monolith's `itemMapper.updateInventoryQuantity(param)` which executed `UPDATE inventory SET qty = qty - #{increment} WHERE itemid = #{itemId}`.
 
-**Authentication**: Service-to-service (internal — not exposed via API Gateway public routes)
+**Authentication**: Required (JWT Bearer token). Although this endpoint is intended for service-to-service calls from the Order Service, it uses the same JWT-based authentication as public endpoints. The Order Service must include a valid JWT token when calling this endpoint.
 
 **Path Parameters**:
 
@@ -710,14 +678,14 @@ Replaces the monolith's `itemMapper.updateInventoryQuantity(param)` which execut
 ```json
 {
   "quantity": 2,
-  "orderId": 1001
+  "orderId": "1001"
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `quantity` | integer | Yes | Amount to decrement (must be > 0) |
-| `orderId` | integer | Yes | Idempotency key — the order ID requesting this decrement |
+| `orderId` | string | Yes | Idempotency key — the order ID requesting this decrement (string type to accommodate both numeric and UUID-based order IDs) |
 
 **Success Response** — `200 OK`:
 
@@ -734,14 +702,13 @@ Replaces the monolith's `itemMapper.updateInventoryQuantity(param)` which execut
 - `409 Conflict` — Insufficient inventory:
   ```json
   {
-    "timestamp": "2025-01-15T10:30:00Z",
-    "status": 409,
-    "error": "Conflict",
-    "message": "Insufficient inventory",
-    "path": "/api/items/EST-1/inventory/decrement"
+    "itemId": "EST-1",
+    "requestedDecrement": 2,
+    "orderId": "1001",
+    "status": "INSUFFICIENT_STOCK"
   }
   ```
-  Returned when the current inventory quantity is less than the requested decrement amount.
+  > **Note**: The 409 response uses a **custom format** (not the standard Spring error structure). Fields include the item ID, requested decrement amount, order ID, and a status string. Returned when the current inventory quantity is less than the requested decrement amount.
 
 - `404 Not Found` — Item does not exist:
   ```json
@@ -764,7 +731,7 @@ Replaces the monolith's `itemMapper.updateInventoryQuantity(param)` which execut
 
 **Purpose**: Compensating action — restore inventory after a failed order. This is the compensating transaction for the inventory decrement step of the Order Saga.
 
-**Authentication**: Service-to-service (internal — not exposed via API Gateway public routes)
+**Authentication**: Required (JWT Bearer token). Although this endpoint is intended for service-to-service calls from the Order Service, it uses the same JWT-based authentication as public endpoints.
 
 **Path Parameters**:
 
@@ -777,14 +744,14 @@ Replaces the monolith's `itemMapper.updateInventoryQuantity(param)` which execut
 ```json
 {
   "quantity": 2,
-  "orderId": 1001
+  "orderId": "1001"
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `quantity` | integer | Yes | Amount to restore (must match the original decrement) |
-| `orderId` | integer | Yes | The order ID for which inventory was originally decremented (for tracing and idempotency) |
+| `orderId` | string | Yes | The order ID for which inventory was originally decremented (for tracing and idempotency) |
 
 **Success Response** — `200 OK`:
 
@@ -795,17 +762,20 @@ Replaces the monolith's `itemMapper.updateInventoryQuantity(param)` which execut
 }
 ```
 
-**Error Response** — `404 Not Found`:
+**Error Responses**:
 
-```json
-{
-  "timestamp": "2025-01-15T10:30:00Z",
-  "status": 404,
-  "error": "Not Found",
-  "message": "Item not found",
-  "path": "/api/items/UNKNOWN/inventory/restore"
-}
-```
+- `404 Not Found` — Item does not exist:
+  > The Catalog Service returns a `404` status code with an **empty response body** when the item is not found.
+
+- `409 Conflict` — Restore conflict (e.g., concurrent modification):
+  ```json
+  {
+    "error": "Conflict",
+    "message": "error details",
+    "status": 409
+  }
+  ```
+  > **Note**: The 409 response uses a **custom format** (not the standard Spring error structure) returned by the controller's exception handler.
 
 > **Idempotency**: Restore requests for an `orderId` that has already been restored (or was never decremented) return success without over-restoring.
 
@@ -851,18 +821,7 @@ Replaces the monolith's `OrderActionBean.newOrder()` which called `orderService.
   "cardType": "Visa",
   "courier": "UPS",
   "locale": "CA",
-  "lineItems": [
-    {
-      "itemId": "EST-1",
-      "quantity": 2,
-      "unitPrice": 16.50
-    },
-    {
-      "itemId": "EST-14",
-      "quantity": 1,
-      "unitPrice": 58.50
-    }
-  ]
+  "cartSessionId": "abc-123-session-id"
 }
 ```
 
@@ -887,17 +846,16 @@ Replaces the monolith's `OrderActionBean.newOrder()` which called `orderService.
 | `billCountry` | string | Yes | Billing country |
 | `creditCard` | string | Yes | Credit card number |
 | `expiryDate` | string | Yes | Card expiry date (e.g., `"12/03"`) |
-| `cardType` | string | Yes | One of: `"Visa"`, `"MasterCard"`, `"American Express"` |
+| `cardType` | string | Yes | Credit card type (any non-blank string accepted; e.g., `"Visa"`, `"MasterCard"`, `"American Express"`) |
 | `courier` | string | Yes | Shipping courier (e.g., `"UPS"`) |
 | `locale` | string | Yes | Locale identifier (e.g., `"CA"`) |
-| `lineItems` | array | Yes | Order line items (at least one required) |
-| `lineItems[].itemId` | string | Yes | Catalog item ID |
-| `lineItems[].quantity` | integer | Yes | Quantity ordered (must be > 0) |
-| `lineItems[].unitPrice` | number | Yes | Unit price at time of order (decimal) |
+| `cartSessionId` | string | Yes | Reference to the externalized cart stored in Redis. The Order Service retrieves cart contents (item IDs, quantities) from `CartStateService` using this ID to construct order line items. |
 
-> **Credit card types**: The `cardType` field must be one of exactly `["Visa", "MasterCard", "American Express"]`, matching the monolith's `OrderActionBean.CARD_TYPE_LIST` static initializer.
+> **Credit card types**: The `cardType` field accepts any non-blank string. While the monolith's `OrderActionBean.CARD_TYPE_LIST` defines `["Visa", "MasterCard", "American Express"]`, the Order Service does **not** enforce server-side validation of the card type value. Client-side validation is recommended.
 
-> **Field naming**: All field names match the `Order.java` domain POJO property names exactly (e.g., `shipToFirstName`, `billAddress1`, `expiryDate`).
+> **Cart-based line items**: Unlike a traditional order API where line items are passed directly in the request body, this API uses a `cartSessionId` to reference the externalized cart in Redis. The Order Service retrieves the cart contents and automatically generates line items from them, replicating the monolith's `Order.initOrder(Account, Cart)` behavior.
+
+> **Field naming**: All field names match the `OrderRequest.java` DTO property names exactly (e.g., `shipToFirstName`, `billAddress1`, `expiryDate`, `cartSessionId`).
 
 **Success Response** — `201 Created` (`OrderDTO`):
 
@@ -966,7 +924,7 @@ Replaces the monolith's `OrderActionBean.newOrder()` which called `orderService.
   ```
   Returned when the Catalog Service reports insufficient inventory for one or more line items. The order is created with status `FAILED` and no inventory is decremented (or already-decremented inventory is compensated via the restore endpoint).
 
-- `503 Service Unavailable` — Catalog Service unreachable during Saga:
+- `503 Service Unavailable` — Catalog or Account Service unreachable during Saga:
   ```json
   {
     "timestamp": "2025-01-15T10:30:00Z",
@@ -976,17 +934,18 @@ Replaces the monolith's `OrderActionBean.newOrder()` which called `orderService.
     "path": "/api/orders"
   }
   ```
+  > **Cross-service dependency note**: Order creation depends on both the Catalog Service (inventory reservation) and the Account Service (user verification). If either downstream service is unavailable, the order may fail with a `5xx` error rather than the `422` that would be returned for a known-bad account. The specific error code depends on which service is unreachable and at what point in the Saga the failure occurs.
 
-- `400 Bad Request` — Invalid card type or missing required fields:
+- `400 Bad Request` — Missing required fields:
   ```json
   {
-    "timestamp": "2025-01-15T10:30:00Z",
+    "timestamp": "2025-01-15T10:30:00.000+00:00",
     "status": 400,
     "error": "Bad Request",
-    "message": "Invalid card type. Must be one of: Visa, MasterCard, American Express",
     "path": "/api/orders"
   }
   ```
+  > **Note**: The `cardType` field is **not** validated server-side — any non-blank string is accepted. Validation errors are triggered by `@NotBlank` annotations on required fields.
 
 **Saga Flow**:
 
@@ -997,6 +956,10 @@ The order placement follows the orchestration-based Saga pattern:
 3. **Confirm or Compensate**:
    - If all inventory reservations succeed: update order status to `CONFIRMED`
    - If any reservation fails: trigger compensating transactions (restore already-decremented inventory via `POST /api/items/{itemId}/inventory/restore`), then update order status to `FAILED`
+
+> **Dual Status Tracking**: The Order Service maintains two distinct status values:
+> - **`Order.status`** (`orders` table): The business-facing order status — values are `PENDING`, `CONFIRMED`, or `FAILED`. This is the value returned in `OrderDTO` responses.
+> - **`OrderSagaState.status`** (`order_saga_state` table): The internal Saga orchestration state — values are `PENDING`, `INVENTORY_RESERVED`, `COMPLETED`, `COMPENSATING`, or `FAILED`. This tracks the Saga's progress and is not exposed in API responses. Note that `COMPLETED` (saga) corresponds to `CONFIRMED` (order).
 
 After a successful order, the monolith clears the cart (matching `CartActionBean.clear()` called after `orderService.insertOrder(order)` in `OrderActionBean.newOrder()`).
 
@@ -1179,7 +1142,7 @@ Replaces the session-scoped `CartActionBean.getCart()` with an externalized, Red
 
 ```json
 {
-  "sessionId": "abc123",
+  "id": "abc123",
   "items": [
     {
       "itemId": "EST-1",
@@ -1219,7 +1182,7 @@ Replaces the session-scoped `CartActionBean.getCart()` with an externalized, Red
 
 ```json
 {
-  "sessionId": "abc123",
+  "id": "abc123",
   "items": [],
   "subTotal": 0.00,
   "numberOfItems": 0
@@ -1383,17 +1346,20 @@ The quantity update logic replicates `CartActionBean.updateCartQuantities()` exa
 
 ## 6. Error Handling Convention
 
-### 6.1 Standard Error Response Format
+### 6.1 Error Response Formats
 
-All error responses across all three services follow a consistent structure:
+> **Important**: Error response formats are **not fully consistent** across all three services. Each service handles errors differently depending on the endpoint and error type. The following subsections describe the actual behavior per service.
+
+#### 6.1.1 Spring Boot Default Error Format
+
+Most standard Spring Boot error responses (e.g., 400 validation errors, 500 server errors) use the default format:
 
 ```json
 {
-  "timestamp": "2025-01-15T10:30:00.000Z",
+  "timestamp": "2025-01-15T10:30:00.000+00:00",
   "status": 400,
   "error": "Bad Request",
-  "message": "Detailed human-readable error description",
-  "path": "/api/resource/path"
+  "path": "/api/accounts"
 }
 ```
 
@@ -1402,24 +1368,38 @@ All error responses across all three services follow a consistent structure:
 | `timestamp` | string | ISO 8601 timestamp of when the error occurred |
 | `status` | integer | HTTP status code |
 | `error` | string | HTTP status phrase (e.g., `"Bad Request"`, `"Not Found"`) |
-| `message` | string | Human-readable error detail. Where applicable, matches the monolith's original error messages |
 | `path` | string | The request URI that triggered the error |
 
-For validation errors (400 Bad Request), an optional `fieldErrors` array may be included:
+> **Note**: Individual field-level validation errors are **not** included as a separate `fieldErrors` array. The default Spring Boot error response does not enumerate per-field messages.
 
-```json
-{
-  "timestamp": "2025-01-15T10:30:00.000Z",
-  "status": 400,
-  "error": "Bad Request",
-  "message": "Validation failed",
-  "path": "/api/accounts",
-  "fieldErrors": [
-    { "field": "firstName", "message": "must not be blank" },
-    { "field": "email", "message": "must be a valid email address" }
-  ]
-}
-```
+#### 6.1.2 Account Service Error Formats
+
+| Error | Format | Example |
+|-------|--------|---------|
+| `401 Unauthorized` (invalid signon) | **Plain text** (`text/plain`) | `Invalid username or password` |
+| `400 Bad Request` (validation) | Spring Boot default JSON (see above) | `{"timestamp":...,"status":400,"error":"Bad Request","path":"/api/accounts"}` |
+| `409 Conflict` (duplicate username) | Spring Boot default JSON | `{"timestamp":...,"status":409,"error":"Conflict","path":"/api/accounts"}` |
+| `403 Forbidden` (wrong user) | Spring Boot default JSON | `{"timestamp":...,"status":403,"error":"Forbidden","path":"/api/accounts/..."}` |
+
+#### 6.1.3 Catalog Service Error Formats
+
+| Error | Format | Example |
+|-------|--------|---------|
+| `404 Not Found` | **Empty body** with 404 status | _(no response body)_ |
+| `409 Conflict` (inventory decrement) | **Custom JSON** | `{"itemId":"EST-1","requestedDecrement":2,"orderId":"1001","status":"INSUFFICIENT_STOCK"}` |
+| `409 Conflict` (inventory restore) | **Custom JSON** | `{"error":"Conflict","message":"error details","status":409}` |
+
+#### 6.1.4 Order Service Error Formats
+
+| Error | Format | Example |
+|-------|--------|---------|
+| `422 Unprocessable Entity` | Custom JSON with Saga context | `{"error":"...","orderId":"...","sagaStatus":"FAILED"}` |
+| `503 Service Unavailable` | Custom JSON | `{"error":"...","message":"downstream service unavailable"}` |
+| `400 Bad Request` (validation) | Spring Boot default JSON | `{"timestamp":...,"status":400,"error":"Bad Request","path":"/api/orders"}` |
+
+#### 6.1.5 Security Filter Chain Behavior
+
+> **⚠️ Known Behavior**: Spring Security's `SecurityConfig` in each service may intercept error forwarding. When a request fails and Spring Boot forwards the request to the `/error` endpoint internally, the security filter chain may block this forwarding and return a `401 Unauthorized` instead of the actual error code. This can cause some `4xx`/`5xx` errors to appear as `401` to clients. This is most noticeable when making requests without a valid JWT token to endpoints that produce non-authentication errors.
 
 ### 6.2 HTTP Status Code Reference
 
@@ -1445,16 +1425,17 @@ For validation errors (400 Bad Request), an optional `fieldErrors` array may be 
 |--------|----------|-------------|
 | `Content-Type: application/json` | Yes (for POST/PUT) | All request bodies must be JSON |
 | `Authorization: Bearer {jwt_token}` | Conditional | Required for protected endpoints (see Section 2.2) |
-| `X-Request-ID: {uuid}` | No | Optional request correlation ID for distributed tracing |
-| `X-Idempotency-Key: {orderId}` | Conditional | Required for inventory decrement/restore requests |
+| `X-Request-ID: {uuid}` | No | Optional request correlation ID for debugging and log correlation. **Note**: This header is accepted but **not** echoed in responses. |
+
+> **Idempotency**: Order-related idempotency is handled via the `orderId` field in the request body of inventory decrement/restore endpoints — not via a separate `X-Idempotency-Key` header.
 
 ### 7.2 Response Headers
 
 | Header | Description |
 |--------|-------------|
-| `Content-Type: application/json` | All response bodies are JSON |
-| `X-Request-ID: {uuid}` | Echoed back if provided in the request |
-| `Location: {uri}` | Returned with `201 Created` responses pointing to the created resource |
+| `Content-Type: application/json` | All response bodies are JSON (except Account Service 401 which returns `text/plain`) |
+
+> **Note**: `X-Request-ID` headers are **not** echoed in responses. `Location` headers are **not** returned with `201 Created` responses. These are potential future enhancements.
 
 ---
 
@@ -1473,9 +1454,8 @@ The following diagram shows which services call which endpoints on other service
 
 ┌──────────────────────┐
 │   Account Service    │
-│                      │─── GET /api/products?categoryId={id} ──► Catalog Service
-│                      │    (for personalization / myList)
-│                      │    Fallback: empty list on failure
+│                      │    No outbound service dependencies
+│                      │    (personalization handled within monolith ActionBeans)
 └──────────────────────┘
 
 ┌──────────────────────┐

@@ -142,18 +142,18 @@ graph TB
             CatCtrl["CategoryController<br/>ProductController<br/>ItemController"]
             CatSvc2["CatalogService<br/>InventoryService"]
             CatRepo["JPA Repositories<br/>(Category, Product,<br/>Item, Inventory, Supplier)"]
-            CatDB[("PostgreSQL<br/>jpetstore_catalog<br/>5 Tables")]
+            CatDB[("PostgreSQL<br/>jpetstore_catalog<br/>6 Tables")]
         end
 
         subgraph "Order Service (Port 8083)"
             OrdCtrl["OrderController<br/>CartController"]
             OrdSvc2["OrderService<br/>CartStateService<br/>OrderSagaOrchestrator"]
             OrdRepo["JPA Repositories<br/>(Order, OrderStatus,<br/>LineItem, CartState)"]
-            OrdDB[("PostgreSQL<br/>jpetstore_order<br/>3 Tables + Sequence")]
+            OrdDB[("PostgreSQL<br/>jpetstore_order<br/>4 Tables + Sequence")]
         end
     end
 
-    subgraph "Preserved Monolith (Port 8080 internal)"
+    subgraph "Preserved Monolith (Port 8090 external, 8080 internal)"
         Mono["Monolith WAR<br/>(Stripes + MyBatis + HSQLDB)<br/>ActionBeans updated with REST clients"]
     end
 
@@ -173,7 +173,6 @@ graph TB
 
     OrdSvc2 -->|"REST: inventory decrement/restore"| CatCtrl
     OrdSvc2 -->|"REST: verify account"| AccCtrl
-    AccSvc2 -->|"REST: product list for personalization"| CatCtrl
 
     OrdSvc2 --> Redis
     GW --> Redis
@@ -246,17 +245,9 @@ The Account Service replaces the monolith's session-scoped `AccountActionBean.au
 5. Subsequent requests include the JWT in the `Authorization: Bearer` header or cookie
 6. The API Gateway's `AuthenticationFilter` validates the JWT on each request
 
-**Cross-Service Dependency — Personalization:**
+**Personalization Note:**
 
-After successful sign-on, account creation, or account update, the Account Service calls the Catalog Service to retrieve the user's personalized product list:
-
-```
-GET /api/products?categoryId={account.favouriteCategoryId}
-```
-
-- **Fallback behavior**: If the Catalog Service is unavailable, `myList` is set to an empty list (`Collections.emptyList()`). The page renders normally without personalized product suggestions. A warning is logged for operational visibility. No error is displayed to the user.
-
-This mirrors the monolith's `AccountActionBean` behavior at lines 118, 140, and 170 where `catalogService.getProductListByCategory(account.getFavouriteCategoryId())` is called after sign-on, account creation, and account edit respectively.
+In the monolith, `AccountActionBean` calls `catalogService.getProductListByCategory(account.getFavouriteCategoryId())` after sign-on, account creation, and account edit (lines 118, 140, 170) to populate the `myList` personalized product list. In the current microservices implementation, personalization is handled within the monolith's ActionBeans — the Account Service does **not** make a cross-service REST call to the Catalog Service for this purpose. A future enhancement could add a `CatalogServiceClient` to the Account Service for direct personalization support.
 
 ---
 
@@ -267,7 +258,7 @@ This mirrors the monolith's `AccountActionBean` behavior at lines 118, 140, and 
 | **Service** | Catalog Service |
 | **Port** | 8082 |
 | **Package** | `com.jpetstore.catalog` |
-| **Owned Tables** | `category`, `product`, `item`, `inventory`, `supplier` (5 tables) |
+| **Owned Tables** | `category`, `product`, `item`, `inventory`, `supplier`, `inventory_reservation` (6 tables) |
 | **Source Service Class** | `org.mybatis.jpetstore.service.CatalogService` |
 | **Source ActionBean** | `CatalogActionBean` |
 | **Database** | `jpetstore_catalog` (PostgreSQL) |
@@ -312,7 +303,7 @@ All catalog endpoints are public. No authentication is required for browsing cat
 | **Service** | Order Service |
 | **Port** | 8083 |
 | **Package** | `com.jpetstore.order` |
-| **Owned Tables** | `orders`, `orderstatus`, `lineitem` (3 tables + PostgreSQL sequence `order_id_seq`) |
+| **Owned Tables** | `orders`, `orderstatus`, `lineitem`, `order_saga_state` (4 tables + PostgreSQL sequence `order_id_seq`) |
 | **Source Service Class** | `org.mybatis.jpetstore.service.OrderService` |
 | **Source ActionBeans** | `CartActionBean`, `OrderActionBean` |
 | **Database** | `jpetstore_order` (PostgreSQL) |
@@ -427,7 +418,7 @@ The services are cut over one at a time in the following order, justified by dep
 **2. Account Service (Second) — Medium Risk**
 
 - Involves write operations (registration, account update) but is self-contained within its 4 tables
-- Has one outbound dependency on Catalog Service (`getProductListByCategory()` for personalization) — already available as a REST API from step 1
+- No outbound dependencies on other microservices (personalization is handled within the monolith's ActionBeans)
 - Validates JWT-based authentication and session externalization patterns
 - Provides the authentication REST API that Order Service will depend on
 
@@ -449,7 +440,6 @@ graph LR
     subgraph "Phase 3"
         OS["Order Service<br/>(Third Cutover)"]
     end
-    CS -->|"REST: getProductListByCategory"| AS
     CS -->|"REST: decrementInventory"| OS
     AS -->|"REST: verifyAccount"| OS
 ```
@@ -476,10 +466,10 @@ Each microservice owns an exclusive PostgreSQL database. No service queries anot
 | Database | Service | Port | Tables | Table Count |
 |----------|---------|------|--------|-------------|
 | `jpetstore_account` | Account Service | 5432 | `account`, `profile`, `signon`, `bannerdata` | 4 |
-| `jpetstore_catalog` | Catalog Service | 5433 | `category`, `product`, `item`, `inventory`, `supplier` | 5 |
-| `jpetstore_order` | Order Service | 5434 | `orders`, `orderstatus`, `lineitem` | 3 (+sequence) |
+| `jpetstore_catalog` | Catalog Service | 5433 | `category`, `product`, `item`, `inventory`, `supplier`, `inventory_reservation` | 6 |
+| `jpetstore_order` | Order Service | 5434 | `orders`, `orderstatus`, `lineitem`, `order_saga_state` | 4 (+sequence) |
 
-**Total**: 12 tables distributed across 3 databases (the `sequence` table from the monolith is replaced by PostgreSQL native sequences and is not migrated).
+**Total**: 14 tables distributed across 3 databases (the `sequence` table from the monolith is replaced by PostgreSQL native sequences and is not migrated). Additionally, `inventory_reservation` and `order_saga_state` are new PostgreSQL-only tables supporting the inventory reservation idempotency and Saga orchestration patterns respectively.
 
 ### 4.2 Cross-Service Foreign Key Removal
 
@@ -512,7 +502,7 @@ Each service manages its own database schema using Liquibase changelogs:
 
 - **Master changelog** (`db.changelog-master.xml`): References all changeset files in order
 - **Initial schema** (`001-initial-schema.xml`): Creates the service's tables with PostgreSQL-native types, indexes, and constraints
-- **Column naming convention**: HSQLDB uppercase column names are mapped to PostgreSQL `snake_case` (e.g., `FAVOURITECATEGORYID` → `favourite_category_id`)
+- **Column naming convention**: Column naming varies by service — Account and Catalog services retain HSQLDB-identical column names (e.g., `favcategory`, `listprice`) for migration data consistency, while the Order service uses `snake_case` (e.g., `order_id`, `ship_addr1`, `bill_to_first_name`). See `migration/mapping/column-mapping-manifest.md` for the complete column mapping.
 - **Type mapping**: HSQLDB types are mapped to PostgreSQL equivalents — `VARCHAR` → `varchar`, `INTEGER` → `integer`, `NUMERIC(10,2)` → `numeric(10,2)`, `TIMESTAMP` → `timestamp with time zone`
 
 ---
@@ -529,7 +519,6 @@ All inter-service communication uses synchronous REST over HTTP. No asynchronous
 | Order Service | Catalog Service | `POST` | `/api/items/{id}/inventory/restore` | Compensating action for failed/rolled-back orders |
 | Order Service | Catalog Service | `GET` | `/api/items/{id}` | Retrieve item details for order line items |
 | Order Service | Account Service | `GET` | `/api/accounts/{username}` | Verify account exists during order placement |
-| Account Service | Catalog Service | `GET` | `/api/products?categoryId={id}` | Retrieve personalized product list (myList) after sign-on/registration/edit |
 | API Gateway | Account Service | `POST` | `/api/accounts/signon` | Token validation and generation |
 
 ### 5.2 Fallback Behavior
@@ -538,7 +527,6 @@ Each cross-service call has defined fallback behavior when the target service is
 
 | Calling Service → Target | Failure Behavior | User Impact |
 |--------------------------|-----------------|-------------|
-| Account Service → Catalog Service | `myList` set to `Collections.emptyList()`; warning logged | Page renders without personalized product suggestions; no error shown |
 | Order Service → Catalog Service | Order placement fails; order status set to `FAILED` | User sees error message; can retry when Catalog Service recovers |
 | Order Service → Account Service | Order placement fails; order not created | User sees error message; can retry when Account Service recovers |
 | API Gateway → any microservice | `503 Service Unavailable` returned; routing flag can be reverted to `"monolith"` | Service temporarily unavailable; operator can switch back to monolith |
@@ -597,7 +585,7 @@ sequenceDiagram
         end
     end
 
-    OS->>ODB: UPDATE order status = CONFIRMED
+    OS->>ODB: UPDATE saga status = COMPLETED, order status = CONFIRMED
     OS-->>AB: 200 OK (order confirmed)
 ```
 
@@ -605,7 +593,7 @@ sequenceDiagram
 
 1. **Step 1 — Create Order (Local)**: Generate order ID via PostgreSQL sequence. Insert order record with `status = PENDING`, insert `orderstatus` and `lineitem` records. This creates a durable record of the attempt.
 2. **Step 2 — Reserve Inventory (Remote)**: For each line item, call `POST /api/items/{itemId}/inventory/decrement` on the Catalog Service. Each request includes the `orderId` as an idempotency key to prevent double-decrement on retries.
-3. **Step 3a — Confirm (Success)**: If all inventory reservations succeed, update the order status to `CONFIRMED`.
+3. **Step 3a — Confirm (Success)**: If all inventory reservations succeed, update the saga state to `COMPLETED` and the order status to `CONFIRMED`.
 4. **Step 3b — Compensate (Failure)**: If any reservation fails, trigger `InventoryCompensation` to restore previously decremented items, then update the order status to `FAILED`.
 
 **Order-first sequencing justification**: The order record is written first (in `PENDING` state) so there is always a durable record of the attempt. This prevents "phantom decrements" where inventory is reserved but no order record exists.
@@ -618,21 +606,23 @@ The `OrderSagaState` entity persists the Saga's progress to enable recovery from
 stateDiagram-v2
     [*] --> PENDING: Order created locally
     PENDING --> INVENTORY_RESERVED: All inventory decrements succeed
-    INVENTORY_RESERVED --> CONFIRMED: Order confirmed
+    INVENTORY_RESERVED --> COMPLETED: Saga completed successfully
     PENDING --> FAILED: Inventory reservation failed (no items decremented)
     PENDING --> COMPENSATING: Partial inventory failure (some items need restoration)
     COMPENSATING --> FAILED: Compensation complete
-    CONFIRMED --> [*]
+    COMPLETED --> [*]
     FAILED --> [*]
 ```
 
+> **Important distinction**: The `OrderSagaState` entity tracks saga progress using these states (`PENDING`, `INVENTORY_RESERVED`, `COMPLETED`, `COMPENSATING`, `FAILED`). The `Order` entity's own `status` field uses different values (`PENDING`, `CONFIRMED`, `FAILED`). When the saga reaches `COMPLETED`, the corresponding order status is set to `CONFIRMED`.
+
 **State Descriptions:**
 
-| State | Description |
-|-------|-------------|
+| Saga State | Description |
+|------------|-------------|
 | `PENDING` | Order record created locally; inventory reservation in progress |
 | `INVENTORY_RESERVED` | All inventory decrements succeeded; awaiting final confirmation |
-| `CONFIRMED` | Order fully confirmed; inventory decremented; transaction complete |
+| `COMPLETED` | Saga completed successfully; order status set to `CONFIRMED`; inventory decremented; transaction complete |
 | `COMPENSATING` | Partial failure detected; restoring previously decremented inventory |
 | `FAILED` | Order failed; all inventory restored (or none was decremented); no data inconsistency |
 
@@ -757,7 +747,7 @@ The monolith's ActionBeans are updated to use REST clients instead of `@SpringBe
 | ORM | Spring Data JPA (Hibernate) | BOM-managed | Replaces MyBatis mappers in new services |
 | Database | PostgreSQL | 16 | One instance per service |
 | Schema Management | Liquibase | 4.31.0 (BOM) | Database-as-code via XML changelogs |
-| API Gateway | Spring Cloud Gateway | 4.2.2 | Spring Cloud 2025.0.0 BOM |
+| API Gateway | Spring Cloud Gateway | 4.2.2 | Spring Cloud 2025.0.1 BOM |
 | Cache / State Store | Redis | 7 | Routing flags, cart state, session externalization |
 | Authentication | JWT (jjwt) | 0.12.6 | `jjwt-api`, `jjwt-impl`, `jjwt-jackson` |
 | Validation | Jakarta Bean Validation | BOM-managed | `spring-boot-starter-validation` |
@@ -807,7 +797,7 @@ These are completely separate compilation units with no shared classpath. Domain
 | Account Service | 8081 | 8081 | `account-service` | eclipse-temurin:17 |
 | Catalog Service | 8082 | 8082 | `catalog-service` | eclipse-temurin:17 |
 | Order Service | 8083 | 8083 | `order-service` | eclipse-temurin:17 |
-| Monolith | 8080 | _(internal only)_ | `monolith` | openjdk:25 (original) |
+| Monolith | 8080 | 8090 | `monolith` | openjdk:17-slim |
 | PostgreSQL (Account) | 5432 | 5432 | `postgres-account` | postgres:16 |
 | PostgreSQL (Catalog) | 5432 | 5433 | `postgres-catalog` | postgres:16 |
 | PostgreSQL (Order) | 5432 | 5434 | `postgres-order` | postgres:16 |
@@ -840,9 +830,9 @@ Each microservice receives its configuration via `application.yml` with the foll
 | Configuration | Account Service | Catalog Service | Order Service |
 |--------------|----------------|----------------|---------------|
 | PostgreSQL URL | `jdbc:postgresql://postgres-account:5432/jpetstore_account` | `jdbc:postgresql://postgres-catalog:5432/jpetstore_catalog` | `jdbc:postgresql://postgres-order:5432/jpetstore_order` |
-| Redis URL | N/A | N/A | `redis://redis:6379` |
+| Redis URL | `redis://redis:6379` | N/A | `redis://redis:6379` |
 | JWT Secret | Configured | N/A | N/A |
-| Inter-service URLs | Catalog Service base URL | N/A | Account Service + Catalog Service base URLs |
+| Inter-service URLs | N/A | N/A | Account Service + Catalog Service base URLs |
 
 ---
 

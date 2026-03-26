@@ -126,9 +126,9 @@ redis-cli SET routing.flag.order-service "monolith"
 
 ```bash
 # PostgreSQL connectivity
-psql -h postgres-account -p 5432 -U jpetstore -d jpetstore_account -c "SELECT 1;"
-psql -h postgres-catalog -p 5433 -U jpetstore -d jpetstore_catalog -c "SELECT 1;"
-psql -h postgres-order   -p 5434 -U jpetstore -d jpetstore_order   -c "SELECT 1;"
+psql -h postgres-account -p 5432 -U account_user -d jpetstore_account -c "SELECT 1;"
+psql -h postgres-catalog -p 5433 -U catalog_user -d jpetstore_catalog -c "SELECT 1;"
+psql -h postgres-order   -p 5434 -U order_user   -d jpetstore_order   -c "SELECT 1;"
 
 # Redis connectivity
 redis-cli -h redis -p 6379 PING
@@ -158,7 +158,7 @@ The HSQLDB schema uses lowercase column names in the DDL, but HSQLDB normalizes 
 | String types | `VARCHAR(n)` | `varchar(n)` | Identical semantics |
 | Integer types | `INT` / `INTEGER` | `integer` | Identical semantics |
 | Decimal types | `DECIMAL(p,s)` | `numeric(p,s)` | Exact precision/scale preserved |
-| Date types | `DATE` | `date` | Identical semantics |
+| Date types | `DATE` | `timestamp with time zone` | Widened to timezone-aware timestamp (Order service: `order_date`, `orderstatus.timestamp`) |
 
 All column names, types, and constraints below are derived directly from the reference schema at `src/main/resources/database/jpetstore-hsqldb-schema.sql`.
 
@@ -276,6 +276,7 @@ Five tables are migrated to the Catalog Service's PostgreSQL database.
 |---|---------------|-------------------|-------------|----------|------------|
 | 1 | `ITEMID`      | `itemid`          | varchar(10) | NOT NULL | **PK** (`pk_inventory`) |
 | 2 | `QTY`         | `qty`             | integer     | NOT NULL | — |
+| 3 | _(NEW)_       | `version`         | integer     | NOT NULL | Default `0`; used for JPA `@Version` optimistic locking |
 
 **Intra-service foreign keys (Catalog):**
 - `product.category` → `category.catid` (preserved)
@@ -286,60 +287,61 @@ Five tables are migrated to the Catalog Service's PostgreSQL database.
 
 ### 2.4 Order Service Database — `jpetstore_order`
 
-Three tables are migrated to the Order Service's PostgreSQL database. The `sequence` table is **not** migrated.
+Three tables (plus one new Saga tracking table) are migrated to the Order Service's PostgreSQL database. The `sequence` table is **not** migrated. All Order service column names use `snake_case` convention (unlike Account and Catalog services which retain HSQLDB-identical names).
 
 #### Table 10: `orders`
 
-| # | HSQLDB Column       | PostgreSQL Column     | Data Type      | Nullable | Constraint |
-|---|---------------------|-----------------------|----------------|----------|------------|
-| 1 | `ORDERID`           | `orderid`             | integer        | NOT NULL | **PK** (`pk_orders`) |
-| 2 | `USERID`            | `userid`              | varchar(80)    | NOT NULL | Cross-service ref (no FK) |
-| 3 | `ORDERDATE`         | `orderdate`           | date           | NOT NULL | — |
-| 4 | `SHIPADDR1`         | `shipaddr1`           | varchar(80)    | NOT NULL | — |
-| 5 | `SHIPADDR2`         | `shipaddr2`           | varchar(80)    | NULL     | — |
-| 6 | `SHIPCITY`          | `shipcity`            | varchar(80)    | NOT NULL | — |
-| 7 | `SHIPSTATE`         | `shipstate`           | varchar(80)    | NOT NULL | — |
-| 8 | `SHIPZIP`           | `shipzip`             | varchar(20)    | NOT NULL | — |
-| 9 | `SHIPCOUNTRY`       | `shipcountry`         | varchar(20)    | NOT NULL | — |
-| 10| `BILLADDR1`         | `billaddr1`           | varchar(80)    | NOT NULL | — |
-| 11| `BILLADDR2`         | `billaddr2`           | varchar(80)    | NULL     | — |
-| 12| `BILLCITY`          | `billcity`            | varchar(80)    | NOT NULL | — |
-| 13| `BILLSTATE`         | `billstate`           | varchar(80)    | NOT NULL | — |
-| 14| `BILLZIP`           | `billzip`             | varchar(20)    | NOT NULL | — |
-| 15| `BILLCOUNTRY`       | `billcountry`         | varchar(20)    | NOT NULL | — |
-| 16| `COURIER`           | `courier`             | varchar(80)    | NOT NULL | — |
-| 17| `TOTALPRICE`        | `totalprice`          | numeric(10,2)  | NOT NULL | — |
-| 18| `BILLTOFIRSTNAME`   | `billtofirstname`     | varchar(80)    | NOT NULL | — |
-| 19| `BILLTOLASTNAME`    | `billtolastname`      | varchar(80)    | NOT NULL | — |
-| 20| `SHIPTOFIRSTNAME`   | `shiptofirstname`     | varchar(80)    | NOT NULL | — |
-| 21| `SHIPTOLASTNAME`    | `shiptolastname`      | varchar(80)    | NOT NULL | — |
-| 22| `CREDITCARD`        | `creditcard`          | varchar(80)    | NOT NULL | — |
-| 23| `EXPRDATE`          | `exprdate`            | varchar(7)     | NOT NULL | — |
-| 24| `CARDTYPE`          | `cardtype`            | varchar(80)    | NOT NULL | — |
-| 25| `LOCALE`            | `locale`              | varchar(80)    | NOT NULL | — |
+| # | HSQLDB Column       | PostgreSQL Column     | Data Type                  | Nullable | Constraint |
+|---|---------------------|-----------------------|----------------------------|----------|------------|
+| 1 | `ORDERID`           | `order_id`            | integer                    | NOT NULL | **PK** (`pk_orders`), default from `order_id_seq` |
+| 2 | `USERID`            | `userid`              | varchar(80)                | NOT NULL | Cross-service ref (no FK); retains original HSQLDB name |
+| 3 | `ORDERDATE`         | `order_date`          | timestamp with time zone   | NOT NULL | Type widened from `DATE` to timezone-aware timestamp |
+| 4 | `SHIPADDR1`         | `ship_addr1`          | varchar(80)                | NOT NULL | — |
+| 5 | `SHIPADDR2`         | `ship_addr2`          | varchar(80)                | NULL     | — |
+| 6 | `SHIPCITY`          | `ship_city`           | varchar(80)                | NOT NULL | — |
+| 7 | `SHIPSTATE`         | `ship_state`          | varchar(80)                | NOT NULL | — |
+| 8 | `SHIPZIP`           | `ship_zip`            | varchar(20)                | NOT NULL | — |
+| 9 | `SHIPCOUNTRY`       | `ship_country`        | varchar(20)                | NOT NULL | — |
+| 10| `BILLADDR1`         | `bill_addr1`          | varchar(80)                | NOT NULL | — |
+| 11| `BILLADDR2`         | `bill_addr2`          | varchar(80)                | NULL     | — |
+| 12| `BILLCITY`          | `bill_city`           | varchar(80)                | NOT NULL | — |
+| 13| `BILLSTATE`         | `bill_state`          | varchar(80)                | NOT NULL | — |
+| 14| `BILLZIP`           | `bill_zip`            | varchar(20)                | NOT NULL | — |
+| 15| `BILLCOUNTRY`       | `bill_country`        | varchar(20)                | NOT NULL | — |
+| 16| `COURIER`           | `courier`             | varchar(80)                | NOT NULL | Already snake_case |
+| 17| `TOTALPRICE`        | `total_price`         | numeric(10,2)              | NOT NULL | — |
+| 18| `BILLTOFIRSTNAME`   | `bill_to_first_name`  | varchar(80)                | NOT NULL | — |
+| 19| `BILLTOLASTNAME`    | `bill_to_last_name`   | varchar(80)                | NOT NULL | — |
+| 20| `SHIPTOFIRSTNAME`   | `ship_to_first_name`  | varchar(80)                | NOT NULL | — |
+| 21| `SHIPTOLASTNAME`    | `ship_to_last_name`   | varchar(80)                | NOT NULL | — |
+| 22| `CREDITCARD`        | `credit_card`         | varchar(80)                | NOT NULL | — |
+| 23| `EXPRDATE`          | `expr_date`           | varchar(7)                 | NOT NULL | — |
+| 24| `CARDTYPE`          | `card_type`           | varchar(80)                | NOT NULL | — |
+| 25| `LOCALE`            | `locale`              | varchar(80)                | NOT NULL | Already snake_case |
+| 26| _(NEW)_             | `status`              | varchar(20)                | NULL     | Saga orchestration state: `PENDING`, `CONFIRMED`, `FAILED` |
 
 > **Cross-service reference:** `orders.userid` references `account.userid` in the Account Service database. This is **not** a database-level FK constraint — it is enforced at the application layer by the Order Service's REST client calling the Account Service's `GET /api/accounts/{username}` endpoint.
 
 #### Table 11: `orderstatus`
 
-| # | HSQLDB Column | PostgreSQL Column | Data Type   | Nullable | Constraint |
-|---|---------------|-------------------|-------------|----------|------------|
-| 1 | `ORDERID`     | `orderid`         | integer     | NOT NULL | **Composite PK** (`pk_orderstatus`) |
-| 2 | `LINENUM`     | `linenum`         | integer     | NOT NULL | **Composite PK** (`pk_orderstatus`) |
-| 3 | `TIMESTAMP`   | `timestamp`       | date        | NOT NULL | — |
-| 4 | `STATUS`      | `status`          | varchar(2)  | NOT NULL | — |
+| # | HSQLDB Column | PostgreSQL Column | Data Type                | Nullable | Constraint |
+|---|---------------|-------------------|--------------------------|----------|------------|
+| 1 | `ORDERID`     | `order_id`        | integer                  | NOT NULL | **Composite PK** (`pk_orderstatus`) |
+| 2 | `LINENUM`     | `line_num`        | integer                  | NOT NULL | **Composite PK** (`pk_orderstatus`) |
+| 3 | `TIMESTAMP`   | `timestamp`       | timestamp with time zone | NOT NULL | Type widened from `DATE` to timezone-aware timestamp |
+| 4 | `STATUS`      | `status`          | varchar(20)              | NOT NULL | Widened from `varchar(2)` to accommodate Saga state values (e.g., `COMPLETED`, `COMPENSATING`) |
 
 #### Table 12: `lineitem`
 
 | # | HSQLDB Column | PostgreSQL Column | Data Type      | Nullable | Constraint |
 |---|---------------|-------------------|----------------|----------|------------|
-| 1 | `ORDERID`     | `orderid`         | integer        | NOT NULL | **Composite PK** (`pk_lineitem`) |
-| 2 | `LINENUM`     | `linenum`         | integer        | NOT NULL | **Composite PK** (`pk_lineitem`) |
-| 3 | `ITEMID`      | `itemid`          | varchar(10)    | NOT NULL | Cross-service ref (no FK) |
-| 4 | `QUANTITY`    | `quantity`        | integer        | NOT NULL | — |
-| 5 | `UNITPRICE`   | `unitprice`       | numeric(10,2)  | NOT NULL | — |
+| 1 | `ORDERID`     | `order_id`        | integer        | NOT NULL | **Composite PK** (`pk_lineitem`) |
+| 2 | `LINENUM`     | `line_num`        | integer        | NOT NULL | **Composite PK** (`pk_lineitem`) |
+| 3 | `ITEMID`      | `item_id`         | varchar(10)    | NOT NULL | Cross-service ref (no FK) |
+| 4 | `QUANTITY`    | `quantity`        | integer        | NOT NULL | Already snake_case |
+| 5 | `UNITPRICE`   | `unit_price`      | numeric(10,2)  | NOT NULL | — |
 
-> **Cross-service reference:** `lineitem.itemid` references `item.itemid` in the Catalog Service database. This is **not** a database-level FK constraint — it is enforced at the application layer by the Order Service's REST client calling the Catalog Service's `GET /api/items/{id}` endpoint.
+> **Cross-service reference:** `lineitem.item_id` references `item.itemid` in the Catalog Service database. This is **not** a database-level FK constraint — it is enforced at the application layer by the Order Service's REST client calling the Catalog Service's `GET /api/items/{id}` endpoint.
 
 #### Table 13: `sequence` — NOT MIGRATED
 
@@ -351,17 +353,20 @@ The `sequence` table (columns: `name` varchar(30), `nextid` integer) is **not** 
 
 Complete HSQLDB → PostgreSQL data type mapping used across all 13 tables:
 
-| HSQLDB Type       | PostgreSQL Type   | Notes |
-|-------------------|-------------------|-------|
-| `VARCHAR(n)`      | `varchar(n)`      | Identical semantics; `n` preserved exactly |
-| `INT` / `INTEGER` | `integer`         | 4-byte signed integer in both databases |
-| `DECIMAL(10,2)`   | `numeric(10,2)`   | Exact precision and scale preserved; used for monetary fields (`listprice`, `unitcost`, `totalprice`, `unitprice`) |
-| `DATE`            | `date`            | Calendar date without time zone; used for `orderdate` and `orderstatus.timestamp` |
+| HSQLDB Type       | PostgreSQL Type            | Notes |
+|-------------------|----------------------------|-------|
+| `VARCHAR(n)`      | `varchar(n)`               | Identical semantics; `n` preserved exactly (widened where noted, e.g., `orderstatus.status` from `varchar(2)` to `varchar(20)`) |
+| `INT` / `INTEGER` | `integer`                  | 4-byte signed integer in both databases |
+| `INT` (boolean)   | `boolean`                  | Account service: `profile.mylistopt` and `profile.banneropt` converted from integer (0/1) to native boolean |
+| `DECIMAL(10,2)`   | `numeric(10,2)`            | Exact precision and scale preserved; used for monetary fields (`listprice`, `unitcost`, `total_price`, `unit_price`) |
+| `DATE`            | `timestamp with time zone` | Order service: `orders.order_date` and `orderstatus.timestamp` widened to timezone-aware timestamps |
 
 **Special considerations:**
 
-- **Boolean-like integers:** The `profile.mylistopt` and `profile.banneropt` columns use `integer` with values `0` or `1` to represent boolean-like flags. These are preserved as `integer` in PostgreSQL (not converted to `boolean`) to maintain exact compatibility with the monolith's MyBatis mappers during the coexistence window.
-- **NULL handling:** All NULL/NOT NULL constraints are preserved exactly as defined in the source schema. No columns change nullability during migration.
+- **Boolean conversion:** The `profile.mylistopt` and `profile.banneropt` columns are converted from HSQLDB `integer` (values `0`/`1`) to PostgreSQL native `boolean` (`true`/`false`). The Account Service's JPA entities use `Boolean` type for these fields.
+- **Date type widening:** The Order service widens HSQLDB `DATE` columns to PostgreSQL `timestamp with time zone` for `orders.order_date` and `orderstatus.timestamp`, enabling timezone-aware date tracking for distributed operations.
+- **Status field widening:** `orderstatus.status` is widened from `varchar(2)` to `varchar(20)` to accommodate Saga state values (e.g., `COMPLETED`, `COMPENSATING`).
+- **NULL handling:** All NULL/NOT NULL constraints are preserved exactly as defined in the source schema. No columns change nullability during migration, except the new `orders.status` column which is nullable (not present in source HSQLDB schema).
 - **Monetary precision:** All monetary values use `numeric(10,2)` — no floating-point types are used, preventing rounding errors.
 - **VARCHAR lengths:** All VARCHAR lengths are preserved exactly. The `supplier.zip` field is `varchar(5)` (shorter than other zip fields at `varchar(20)`), matching the source schema precisely.
 
@@ -495,34 +500,21 @@ chmod +x migration/scripts/provision-postgres.sh
 
 ### 4.2 Run Liquibase Schema Migrations
 
-Each microservice owns its Liquibase changelog. Run the changelogs to create the PostgreSQL table schemas:
+Each microservice owns its Liquibase changelog. The schemas are created **automatically** when each Spring Boot service starts, because `spring.liquibase.enabled=true` is configured in each service's `application.yml`. No manual Liquibase commands are needed.
+
+To trigger schema creation, simply start the services:
 
 ```bash
-# Account Service schema
-cd account-service
-../mvnw liquibase:update -B \
-  -Dliquibase.url="jdbc:postgresql://postgres-account:5432/jpetstore_account" \
-  -Dliquibase.username="jpetstore" \
-  -Dliquibase.password="${POSTGRES_PASSWORD}"
+# Start all services (including PostgreSQL instances) via Docker Compose
+docker compose up -d account-service catalog-service order-service
 
-# Catalog Service schema
-cd ../catalog-service
-../mvnw liquibase:update -B \
-  -Dliquibase.url="jdbc:postgresql://postgres-catalog:5433/jpetstore_catalog" \
-  -Dliquibase.username="jpetstore" \
-  -Dliquibase.password="${POSTGRES_PASSWORD}"
-
-# Order Service schema
-cd ../order-service
-../mvnw liquibase:update -B \
-  -Dliquibase.url="jdbc:postgresql://postgres-order:5434/jpetstore_order" \
-  -Dliquibase.username="jpetstore" \
-  -Dliquibase.password="${POSTGRES_PASSWORD}"
-
-cd ..
+# Verify schemas were created
+docker exec postgres-account psql -U account_user -d jpetstore_account -c "\dt"
+docker exec postgres-catalog psql -U catalog_user -d jpetstore_catalog -c "\dt"
+docker exec postgres-order   psql -U order_user   -d jpetstore_order   -c "\dt"
 ```
 
-Alternatively, the schemas are created automatically when each service starts if `spring.liquibase.enabled=true` in `application.yml`.
+> **Note:** There is no `liquibase-maven-plugin` configured in the service POMs. Liquibase runs exclusively via the `liquibase-core` runtime dependency integrated with Spring Boot's auto-configuration. Manual Liquibase CLI usage is not supported.
 
 ### 4.3 Load Data
 
@@ -536,7 +528,9 @@ chmod +x migration/scripts/load-data.sh
   --account-db-url="jdbc:postgresql://postgres-account:5432/jpetstore_account" \
   --catalog-db-url="jdbc:postgresql://postgres-catalog:5433/jpetstore_catalog" \
   --order-db-url="jdbc:postgresql://postgres-order:5434/jpetstore_order" \
-  --db-user="jpetstore" \
+  --account-db-user="account_user" \
+  --catalog-db-user="catalog_user" \
+  --order-db-user="order_user" \
   --db-password="${POSTGRES_PASSWORD}"
 ```
 
@@ -599,7 +593,9 @@ chmod +x migration/scripts/validate-integrity.sh
   --catalog-db-url="jdbc:postgresql://postgres-catalog:5433/jpetstore_catalog" \
   --order-db-url="jdbc:postgresql://postgres-order:5434/jpetstore_order" \
   --export-manifest="migration/export-data/export-manifest.json" \
-  --db-user="jpetstore" \
+  --account-db-user="account_user" \
+  --catalog-db-user="catalog_user" \
+  --order-db-user="order_user" \
   --db-password="${POSTGRES_PASSWORD}"
 ```
 
@@ -720,8 +716,8 @@ SELECT COALESCE(MAX(orderid), 0) AS max_migrated_id FROM orders;
 | `category`     |                     3 |
 | `product`      |                     4 |
 | `item`         |                    11 |
-| `inventory`    |                     2 |
-| `orders`       |                    25 |
+| `inventory`    |                     3 |
+| `orders`       |                    26 |
 | `orderstatus`  |                     4 |
 | `lineitem`     |                     5 |
 
@@ -730,7 +726,7 @@ SELECT COALESCE(MAX(orderid), 0) AS max_migrated_id FROM orders;
 SELECT COUNT(*) AS column_count
 FROM information_schema.columns
 WHERE table_schema = 'public' AND table_name = 'orders';
--- Expected: 25
+-- Expected: 26
 ```
 
 **Pass criteria:** PostgreSQL column count matches expected count for every table.
@@ -809,8 +805,9 @@ Services are cut over one at a time, in the following order. This order is manda
 
 1. **Verify dual-write is operational:**
    ```bash
-   # Check dual-write health endpoint
-   curl -s http://catalog-service:8082/actuator/health | grep dualWrite
+   # Check service health (dual-write is enabled via application configuration)
+   curl -s http://catalog-service:8082/actuator/health | jq '.status'
+   # Expected: "UP"
    ```
 
 2. **Switch the routing flag:**
@@ -856,7 +853,9 @@ redis-cli SET routing.flag.catalog-service "monolith"
 
 1. **Verify dual-write is operational:**
    ```bash
-   curl -s http://account-service:8081/actuator/health | grep dualWrite
+   # Check service health (dual-write is enabled via application configuration)
+   curl -s http://account-service:8081/actuator/health | jq '.status'
+   # Expected: "UP"
    ```
 
 2. **Switch the routing flag:**
@@ -905,7 +904,9 @@ redis-cli SET routing.flag.account-service "monolith"
 
 1. **Verify dual-write is operational:**
    ```bash
-   curl -s http://order-service:8083/actuator/health | grep dualWrite
+   # Check service health (dual-write is enabled via application configuration)
+   curl -s http://order-service:8083/actuator/health | jq '.status'
+   # Expected: "UP"
    ```
 
 2. **Switch the routing flag:**
@@ -995,8 +996,11 @@ Dual-write must be enabled and verified **before** the routing flag is switched 
 
 3. **Verify dual-write is active:**
    ```bash
-   curl -s http://<service>:<port>/actuator/health | jq '.components.dualWrite'
-   # Expected: {"status": "UP", "details": {"enabled": true, "lagMs": 0}}
+   # Check that the service is healthy after enabling dual-write
+   curl -s http://<service>:<port>/actuator/health | jq '.status'
+   # Expected: "UP"
+   # Note: Dual-write status is managed via application configuration properties,
+   # not exposed as a separate health indicator component.
    ```
 
 4. **Test dual-write with a write operation:**
@@ -1255,19 +1259,18 @@ curl -s http://catalog-service:8082/actuator/health | jq .
 curl -s http://order-service:8083/actuator/health | jq .
 curl -s http://api-gateway:8080/actuator/health | jq .
 
-# Dual-write status
-curl -s http://account-service:8081/actuator/health | jq '.components.dualWrite'
-curl -s http://catalog-service:8082/actuator/health | jq '.components.dualWrite'
-curl -s http://order-service:8083/actuator/health | jq '.components.dualWrite'
+# Dual-write status (managed via application configuration, not a separate health indicator)
+# Verify dual-write configuration is active by checking application properties:
+# spring.dual-write.enabled=true in each service's application.yml
 ```
 
 ### PostgreSQL Connection Commands
 
 ```bash
-# Connect to each database
-psql -h postgres-account -p 5432 -U jpetstore -d jpetstore_account
-psql -h postgres-catalog -p 5433 -U jpetstore -d jpetstore_catalog
-psql -h postgres-order   -p 5434 -U jpetstore -d jpetstore_order
+# Connect to each database (use service-specific users from docker-compose.yml)
+psql -h postgres-account -p 5432 -U account_user -d jpetstore_account
+psql -h postgres-catalog -p 5433 -U catalog_user -d jpetstore_catalog
+psql -h postgres-order   -p 5434 -U order_user   -d jpetstore_order
 ```
 
 ## Appendix B: Seed Data Reference

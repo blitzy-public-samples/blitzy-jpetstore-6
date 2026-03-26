@@ -60,7 +60,7 @@ new services via runtime-configurable per-service routing flags.
 |-----------|---------|---------|
 | Java | 17 | Runtime for all modules |
 | Spring Boot | 3.5.x | Framework for new microservices |
-| Spring Cloud Gateway | 2025.0.0 (BOM) | API Gateway routing and filtering |
+| Spring Cloud Gateway | 2025.0.1 (BOM) | API Gateway routing and filtering |
 | PostgreSQL | 16 | Database for microservices (one per service) |
 | Redis | 7 | Routing flags, externalized cart/session state |
 | Liquibase | 4.31.x (managed) | Database schema management |
@@ -108,9 +108,17 @@ Essentials
 Build the entire multi-module project (monolith + all microservices + migration tooling):
 
 ```bash
-./mvnw clean package                   # Build all modules with tests
 ./mvnw clean package -DskipTests       # Build all modules, skip tests
+./mvnw clean package                   # Build all modules with tests
 ```
+
+> **Note:** The `api-gateway` module may fail to compile due to Spring Cloud Gateway
+> reactive dependency resolution issues. To build all other modules while excluding
+> the API Gateway, use:
+>
+> ```bash
+> ./mvnw clean package -B -DskipTests -pl '!api-gateway'
+> ```
 
 ### Build Individual Modules
 
@@ -125,7 +133,7 @@ Build the entire multi-module project (monolith + all microservices + migration 
 
 ## Run on Application Server (Monolith)
 
-Running the original JPetStore monolith under Tomcat (using the [cargo-maven2-plugin](https://codehaus-cargo.github.io/cargo/Maven2+plugin.html)).
+Running the original JPetStore monolith under Tomcat (using the [cargo-maven3-plugin](https://codehaus-cargo.github.io/cargo/Maven+3+Plugin.html)).
 
 - Clone this repository
 
@@ -294,8 +302,8 @@ The recommended cutover order is based on dependency analysis and risk assessmen
    simplest service.
 
 2. **Account Service** (second) — Medium risk. Self-contained write operations (registration,
-   profile update). Validates JWT-based authentication. Depends on Catalog Service for
-   personalization (already live from step 1).
+   profile update). Validates JWT-based authentication. Self-contained within its 4 tables
+   (account, profile, signon, bannerdata).
 
 3. **Order Service** (last) — Highest risk. Contains the distributed order transaction
    (Saga pattern). Depends on both Catalog Service (inventory decrement) and Account Service

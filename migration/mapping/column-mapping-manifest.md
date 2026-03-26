@@ -91,7 +91,7 @@ Column naming follows a **per-service convention** aligned with each service's L
 |---------------|---------------|-------------------|-------------|
 | Compound word (no separator) | `orderid` | `order_id` | Split at logical word boundary |
 | Compound word (no separator) | `billtofirstname` | `bill_to_first_name` | Split at each logical word boundary |
-| Special case | `userid` | `username` | Renamed to match application semantics (no FK to account) |
+| Special case — retained | `userid` | `userid` | Retains original HSQLDB column name for migration data consistency (Liquibase comment: "Retains original HSQLDB column name") |
 | Short name (already lowercase) | `addr1` | `addr1` | Preserved as-is (already snake_case-compatible) |
 | Single word (already lowercase) | `courier` | `courier` | No change needed |
 
@@ -105,7 +105,7 @@ Column naming follows a **per-service convention** aligned with each service's L
 | **NOT NULL** | Preserved exactly as defined in source schema | All columns |
 | **UNIQUE** | Preserved if present in source schema | All tables |
 | **Intra-service Foreign Key** | **Preserved** as database-level constraint | FKs where both tables reside in the same database (e.g., `product.category → category.catid`) |
-| **Cross-service Foreign Key** | **Removed** as database constraint; enforced at application layer via REST API calls | FKs where tables reside in different databases (e.g., `lineitem.item_id → item.itemid`, `orders.username → account.userid`) |
+| **Cross-service Foreign Key** | **Removed** as database constraint; enforced at application layer via REST API calls | FKs where tables reside in different databases (e.g., `lineitem.item_id → item.itemid`, `orders.userid → account.userid`) |
 
 ---
 
@@ -119,10 +119,10 @@ This database serves the **Account Service** and contains all user identity, aut
 
 **Source DDL** (from `jpetstore-hsqldb-schema.sql`, lines 30–34):
 ```sql
-CREATE TABLE signon (
-    username VARCHAR(25) NOT NULL,
-    password VARCHAR(25) NOT NULL,
-    CONSTRAINT pk_signon PRIMARY KEY (username)
+create table signon (
+    username varchar(25) not null,
+    password varchar(25) not null,
+    constraint pk_signon primary key (username)
 );
 ```
 
@@ -130,8 +130,8 @@ CREATE TABLE signon (
 
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|
-| 1 | `username` | `VARCHAR(25)` | `username` | `varchar(25)` | NOT NULL | PK (`pk_signon`) | No |
-| 2 | `password` | `VARCHAR(25)` | `password` | `varchar(25)` | NOT NULL | — | No |
+| 1 | `username` | `VARCHAR(25)` | `username` | `varchar(25)` | not null | PK (`pk_signon`) | No |
+| 2 | `password` | `VARCHAR(25)` | `password` | `varchar(25)` | not null | — | No |
 
 **Notes:**
 - Column names are already lowercase and snake_case-compatible — no renaming required.
@@ -143,20 +143,20 @@ CREATE TABLE signon (
 
 **Source DDL** (from `jpetstore-hsqldb-schema.sql`, lines 36–50):
 ```sql
-CREATE TABLE account (
-    userid    VARCHAR(80) NOT NULL,
-    email     VARCHAR(80) NOT NULL,
-    firstname VARCHAR(80) NOT NULL,
-    lastname  VARCHAR(80) NOT NULL,
-    status    VARCHAR(2)  NULL,
-    addr1     VARCHAR(80) NOT NULL,
-    addr2     VARCHAR(40) NULL,
-    city      VARCHAR(80) NOT NULL,
-    state     VARCHAR(80) NOT NULL,
-    zip       VARCHAR(20) NOT NULL,
-    country   VARCHAR(20) NOT NULL,
-    phone     VARCHAR(80) NOT NULL,
-    CONSTRAINT pk_account PRIMARY KEY (userid)
+create table account (
+    userid   varchar(80) not null,
+    email    varchar(80) not null,
+    firstname varchar(80) not null,
+    lastname varchar(80) not null,
+    status   varchar(2)  null,
+    addr1    varchar(80) not null,
+    addr2    varchar(40) null,
+    city     varchar(80) not null,
+    state    varchar(80) not null,
+    zip      varchar(20) not null,
+    country  varchar(20) not null,
+    phone    varchar(80) not null,
+    constraint pk_account primary key (userid)
 );
 ```
 
@@ -164,18 +164,18 @@ CREATE TABLE account (
 
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|
-| 1 | `userid` | `VARCHAR(80)` | `userid` | `varchar(80)` | NOT NULL | PK (`pk_account`) | No |
-| 2 | `email` | `VARCHAR(80)` | `email` | `varchar(80)` | NOT NULL | — | No |
-| 3 | `firstname` | `VARCHAR(80)` | `firstname` | `varchar(80)` | NOT NULL | — | No |
-| 4 | `lastname` | `VARCHAR(80)` | `lastname` | `varchar(80)` | NOT NULL | — | No |
-| 5 | `status` | `VARCHAR(2)` | `status` | `varchar(2)` | NULL | — | No |
-| 6 | `addr1` | `VARCHAR(80)` | `addr1` | `varchar(80)` | NOT NULL | — | No |
-| 7 | `addr2` | `VARCHAR(40)` | `addr2` | `varchar(40)` | NULL | — | No |
-| 8 | `city` | `VARCHAR(80)` | `city` | `varchar(80)` | NOT NULL | — | No |
-| 9 | `state` | `VARCHAR(80)` | `state` | `varchar(80)` | NOT NULL | — | No |
-| 10 | `zip` | `VARCHAR(20)` | `zip` | `varchar(20)` | NOT NULL | — | No |
-| 11 | `country` | `VARCHAR(20)` | `country` | `varchar(20)` | NOT NULL | — | No |
-| 12 | `phone` | `VARCHAR(80)` | `phone` | `varchar(80)` | NOT NULL | — | No |
+| 1 | `userid` | `VARCHAR(80)` | `userid` | `varchar(80)` | not null | PK (`pk_account`) | No |
+| 2 | `email` | `VARCHAR(80)` | `email` | `varchar(80)` | not null | — | No |
+| 3 | `firstname` | `VARCHAR(80)` | `firstname` | `varchar(80)` | not null | — | No |
+| 4 | `lastname` | `VARCHAR(80)` | `lastname` | `varchar(80)` | not null | — | No |
+| 5 | `status` | `VARCHAR(2)` | `status` | `varchar(2)` | null | — | No |
+| 6 | `addr1` | `VARCHAR(80)` | `addr1` | `varchar(80)` | not null | — | No |
+| 7 | `addr2` | `VARCHAR(40)` | `addr2` | `varchar(40)` | null | — | No |
+| 8 | `city` | `VARCHAR(80)` | `city` | `varchar(80)` | not null | — | No |
+| 9 | `state` | `VARCHAR(80)` | `state` | `varchar(80)` | not null | — | No |
+| 10 | `zip` | `VARCHAR(20)` | `zip` | `varchar(20)` | not null | — | No |
+| 11 | `country` | `VARCHAR(20)` | `country` | `varchar(20)` | not null | — | No |
+| 12 | `phone` | `VARCHAR(80)` | `phone` | `varchar(80)` | not null | — | No |
 
 **Renaming Details:**
 - No columns renamed — Account Service uses HSQLDB-identical lowercase column names per the per-service naming convention (see [Section 2](#2-column-naming-convention)).
@@ -186,13 +186,13 @@ CREATE TABLE account (
 
 **Source DDL** (from `jpetstore-hsqldb-schema.sql`, lines 52–59):
 ```sql
-CREATE TABLE profile (
-    userid      VARCHAR(80) NOT NULL,
-    langpref    VARCHAR(80) NOT NULL,
-    favcategory VARCHAR(30),
-    mylistopt   INT,
-    banneropt   INT,
-    CONSTRAINT pk_profile PRIMARY KEY (userid)
+create table profile (
+    userid     varchar(80) not null,
+    langpref   varchar(80) not null,
+    favcategory varchar(30),
+    mylistopt  int,
+    banneropt  int,
+    constraint pk_profile primary key (userid)
 );
 ```
 
@@ -200,17 +200,17 @@ CREATE TABLE profile (
 
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|
-| 1 | `userid` | `VARCHAR(80)` | `userid` | `varchar(80)` | NOT NULL | PK (`pk_profile`) | No |
-| 2 | `langpref` | `VARCHAR(80)` | `langpref` | `varchar(80)` | NOT NULL | — | No |
-| 3 | `favcategory` | `VARCHAR(30)` | `favcategory` | `varchar(30)` | NULL | — | No |
-| 4 | `mylistopt` | `INT` | `mylistopt` | `integer` | NULL | — | No |
-| 5 | `banneropt` | `INT` | `banneropt` | `integer` | NULL | — | No |
+| 1 | `userid` | `VARCHAR(80)` | `userid` | `varchar(80)` | not null | PK (`pk_profile`) | No |
+| 2 | `langpref` | `VARCHAR(80)` | `langpref` | `varchar(80)` | not null | — | No |
+| 3 | `favcategory` | `VARCHAR(30)` | `favcategory` | `varchar(30)` | null | — | No |
+| 4 | `mylistopt` | `INT` | `mylistopt` | `boolean` | null | — | No (type changed) |
+| 5 | `banneropt` | `INT` | `banneropt` | `boolean` | null | — | No (type changed) |
 
 **Renaming Details:**
 - No columns renamed — Account Service uses HSQLDB-identical lowercase column names.
 
 **Data Type Changes:**
-- `INT` → `integer` (columns 4, 5)
+- `INT` → `boolean` (columns 4, 5) — HSQLDB stores boolean preferences as integer (0/1); PostgreSQL uses native `boolean` type. During migration, `0` → `false`, non-zero → `true`.
 
 ---
 
@@ -218,10 +218,10 @@ CREATE TABLE profile (
 
 **Source DDL** (from `jpetstore-hsqldb-schema.sql`, lines 61–65):
 ```sql
-CREATE TABLE bannerdata (
-    favcategory VARCHAR(80)  NOT NULL,
-    bannername  VARCHAR(255) NULL,
-    CONSTRAINT pk_bannerdata PRIMARY KEY (favcategory)
+create table bannerdata (
+    favcategory varchar(80)  not null,
+    bannername varchar(255) null,
+    constraint pk_bannerdata primary key (favcategory)
 );
 ```
 
@@ -229,8 +229,8 @@ CREATE TABLE bannerdata (
 
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|
-| 1 | `favcategory` | `VARCHAR(80)` | `favcategory` | `varchar(80)` | NOT NULL | PK (`pk_bannerdata`) | No |
-| 2 | `bannername` | `VARCHAR(255)` | `bannername` | `varchar(255)` | NULL | — | No |
+| 1 | `favcategory` | `VARCHAR(80)` | `favcategory` | `varchar(80)` | not null | PK (`pk_bannerdata`) | No |
+| 2 | `bannername` | `VARCHAR(255)` | `bannername` | `varchar(255)` | null | — | No |
 
 **Renaming Details:**
 - No columns renamed — Account Service uses HSQLDB-identical lowercase column names.
@@ -247,11 +247,11 @@ This database serves the **Catalog Service** and contains all product catalog, i
 
 **Source DDL** (from `jpetstore-hsqldb-schema.sql`, lines 113–118):
 ```sql
-CREATE TABLE category (
-    catid VARCHAR(10)  NOT NULL,
-    name  VARCHAR(80)  NULL,
-    descn VARCHAR(255) NULL,
-    CONSTRAINT pk_category PRIMARY KEY (catid)
+create table category (
+    catid varchar(10)  not null,
+    name varchar(80)  null,
+    descn varchar(255) null,
+    constraint pk_category primary key (catid)
 );
 ```
 
@@ -259,9 +259,9 @@ CREATE TABLE category (
 
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|
-| 1 | `catid` | `VARCHAR(10)` | `catid` | `varchar(10)` | NOT NULL | PK (`pk_category`) | No |
-| 2 | `name` | `VARCHAR(80)` | `name` | `varchar(80)` | NULL | — | No |
-| 3 | `descn` | `VARCHAR(255)` | `descn` | `varchar(255)` | NULL | — | No |
+| 1 | `catid` | `VARCHAR(10)` | `catid` | `varchar(10)` | not null | PK (`pk_category`) | No |
+| 2 | `name` | `VARCHAR(80)` | `name` | `varchar(80)` | null | — | No |
+| 3 | `descn` | `VARCHAR(255)` | `descn` | `varchar(255)` | null | — | No |
 
 **Renaming Details:**
 - No columns renamed — Catalog Service uses HSQLDB-identical lowercase column names per the per-service naming convention (see [Section 2](#2-column-naming-convention)).
@@ -272,30 +272,30 @@ CREATE TABLE category (
 
 **Source DDL** (from `jpetstore-hsqldb-schema.sql`, lines 120–128):
 ```sql
-CREATE TABLE product (
-    productid VARCHAR(10)  NOT NULL,
-    category  VARCHAR(10)  NOT NULL,
-    name      VARCHAR(80)  NULL,
-    descn     VARCHAR(255) NULL,
-    CONSTRAINT pk_product PRIMARY KEY (productid),
-    CONSTRAINT fk_product_1 FOREIGN KEY (category) REFERENCES category (catid)
+create table product (
+    productid varchar(10)  not null,
+    category varchar(10)  not null,
+    name     varchar(80)  null,
+    descn    varchar(255) null,
+    constraint pk_product primary key (productid),
+    constraint fk_product_1 foreign key (category) references category (catid)
 );
 ```
 
 **Indexes** (lines 130–131):
 ```sql
-CREATE INDEX productCat  ON product (category);
-CREATE INDEX productName ON product (name);
+create index productCat  ON product (category);
+create index productName ON product (name);
 ```
 
 **Column Mapping (4 columns):**
 
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|
-| 1 | `productid` | `VARCHAR(10)` | `productid` | `varchar(10)` | NOT NULL | PK (`pk_product`) | No |
-| 2 | `category` | `VARCHAR(10)` | `category` | `varchar(10)` | NOT NULL | FK → `category(catid)` (INTRA-SERVICE, preserved) | No |
-| 3 | `name` | `VARCHAR(80)` | `name` | `varchar(80)` | NULL | — | No |
-| 4 | `descn` | `VARCHAR(255)` | `descn` | `varchar(255)` | NULL | — | No |
+| 1 | `productid` | `VARCHAR(10)` | `productid` | `varchar(10)` | not null | PK (`pk_product`) | No |
+| 2 | `category` | `VARCHAR(10)` | `category` | `varchar(10)` | not null | FK → `category(catid)` (INTRA-SERVICE, preserved) | No |
+| 3 | `name` | `VARCHAR(80)` | `name` | `varchar(80)` | null | — | No |
+| 4 | `descn` | `VARCHAR(255)` | `descn` | `varchar(255)` | null | — | No |
 
 **Renaming Details:**
 - No columns renamed — Catalog Service uses HSQLDB-identical lowercase column names.
@@ -304,8 +304,8 @@ CREATE INDEX productName ON product (name);
 - `fk_product_1`: `category` → `category(catid)` — **INTRA-SERVICE** (both tables in `jpetstore_catalog`) → **preserved** as database constraint.
 
 **Indexes:**
-- `productCat` → `idx_product_category` on `product(category)`
-- `productName` → `idx_product_name` on `product(name)`
+- `productCat` on `product(category)` — retained as-is
+- `productName` on `product(name)` — retained as-is
 
 ---
 
@@ -313,44 +313,44 @@ CREATE INDEX productName ON product (name);
 
 **Source DDL** (from `jpetstore-hsqldb-schema.sql`, lines 133–150):
 ```sql
-CREATE TABLE item (
-    itemid    VARCHAR(10)    NOT NULL,
-    productid VARCHAR(10)    NOT NULL,
-    listprice DECIMAL(10,2)  NULL,
-    unitcost  DECIMAL(10,2)  NULL,
-    supplier  INT            NULL,
-    status    VARCHAR(2)     NULL,
-    attr1     VARCHAR(80)    NULL,
-    attr2     VARCHAR(80)    NULL,
-    attr3     VARCHAR(80)    NULL,
-    attr4     VARCHAR(80)    NULL,
-    attr5     VARCHAR(80)    NULL,
-    CONSTRAINT pk_item PRIMARY KEY (itemid),
-    CONSTRAINT fk_item_1 FOREIGN KEY (productid) REFERENCES product (productid),
-    CONSTRAINT fk_item_2 FOREIGN KEY (supplier)  REFERENCES supplier (suppid)
+create table item (
+    itemid   varchar(10)    not null,
+    productid varchar(10)    not null,
+    listprice decimal(10,2)  null,
+    unitcost  decimal(10,2)  null,
+    supplier int            null,
+    status   varchar(2)     null,
+    attr1    varchar(80)    null,
+    attr2    varchar(80)    null,
+    attr3    varchar(80)    null,
+    attr4    varchar(80)    null,
+    attr5    varchar(80)    null,
+    constraint pk_item primary key (itemid),
+    constraint fk_item_1 foreign key (productid) references product (productid),
+    constraint fk_item_2 foreign key (supplier)  references supplier (suppid)
 );
 ```
 
 **Index** (line 152):
 ```sql
-CREATE INDEX itemProd ON item (productid);
+create index itemProd ON item (productid);
 ```
 
 **Column Mapping (11 columns):**
 
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|
-| 1 | `itemid` | `VARCHAR(10)` | `itemid` | `varchar(10)` | NOT NULL | PK (`pk_item`) | No |
-| 2 | `productid` | `VARCHAR(10)` | `productid` | `varchar(10)` | NOT NULL | FK → `product(productid)` (INTRA-SERVICE, preserved) | No |
-| 3 | `listprice` | `DECIMAL(10,2)` | `listprice` | `numeric(10,2)` | NULL | — | No |
-| 4 | `unitcost` | `DECIMAL(10,2)` | `unitcost` | `numeric(10,2)` | NULL | — | No |
-| 5 | `supplier` | `INT` | `supplier` | `integer` | NULL | FK → `supplier(suppid)` (INTRA-SERVICE, preserved) | No |
-| 6 | `status` | `VARCHAR(2)` | `status` | `varchar(2)` | NULL | — | No |
-| 7 | `attr1` | `VARCHAR(80)` | `attr1` | `varchar(80)` | NULL | — | No |
-| 8 | `attr2` | `VARCHAR(80)` | `attr2` | `varchar(80)` | NULL | — | No |
-| 9 | `attr3` | `VARCHAR(80)` | `attr3` | `varchar(80)` | NULL | — | No |
-| 10 | `attr4` | `VARCHAR(80)` | `attr4` | `varchar(80)` | NULL | — | No |
-| 11 | `attr5` | `VARCHAR(80)` | `attr5` | `varchar(80)` | NULL | — | No |
+| 1 | `itemid` | `VARCHAR(10)` | `itemid` | `varchar(10)` | not null | PK (`pk_item`) | No |
+| 2 | `productid` | `VARCHAR(10)` | `productid` | `varchar(10)` | not null | FK → `product(productid)` (INTRA-SERVICE, preserved) | No |
+| 3 | `listprice` | `DECIMAL(10,2)` | `listprice` | `numeric(10,2)` | null | — | No |
+| 4 | `unitcost` | `DECIMAL(10,2)` | `unitcost` | `numeric(10,2)` | null | — | No |
+| 5 | `supplier` | `INT` | `supplier` | `integer` | null | FK → `supplier(suppid)` (INTRA-SERVICE, preserved) | No |
+| 6 | `status` | `VARCHAR(2)` | `status` | `varchar(2)` | null | — | No |
+| 7 | `attr1` | `VARCHAR(80)` | `attr1` | `varchar(80)` | null | — | No |
+| 8 | `attr2` | `VARCHAR(80)` | `attr2` | `varchar(80)` | null | — | No |
+| 9 | `attr3` | `VARCHAR(80)` | `attr3` | `varchar(80)` | null | — | No |
+| 10 | `attr4` | `VARCHAR(80)` | `attr4` | `varchar(80)` | null | — | No |
+| 11 | `attr5` | `VARCHAR(80)` | `attr5` | `varchar(80)` | null | — | No |
 
 **Renaming Details:**
 - No columns renamed — Catalog Service uses HSQLDB-identical lowercase column names.
@@ -364,7 +364,7 @@ CREATE INDEX itemProd ON item (productid);
 - `fk_item_2`: `supplier` → `supplier(suppid)` — both tables in `jpetstore_catalog`
 
 **Index:**
-- `itemProd` → `idx_item_productid` on `item(productid)`
+- `itemProd` on `item(productid)` — retained as-is
 
 ---
 
@@ -372,10 +372,10 @@ CREATE INDEX itemProd ON item (productid);
 
 **Source DDL** (from `jpetstore-hsqldb-schema.sql`, lines 154–158):
 ```sql
-CREATE TABLE inventory (
-    itemid VARCHAR(10) NOT NULL,
-    qty    INT         NOT NULL,
-    CONSTRAINT pk_inventory PRIMARY KEY (itemid)
+create table inventory (
+    itemid varchar(10) not null,
+    qty   int         not null,
+    constraint pk_inventory primary key (itemid)
 );
 ```
 
@@ -383,9 +383,9 @@ CREATE TABLE inventory (
 
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed | Migration Note |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|---------------|
-| 1 | `itemid` | `VARCHAR(10)` | `itemid` | `varchar(10)` | NOT NULL | PK (`pk_inventory`) | No | Direct migration |
-| 2 | `qty` | `INT` | `qty` | `integer` | NOT NULL | — | No | Direct migration |
-| 3 | *(new)* | *(n/a)* | `version` | `integer` | NOT NULL (default 0) | — | N/A | **Added column** — JPA `@Version` for optimistic locking |
+| 1 | `itemid` | `VARCHAR(10)` | `itemid` | `varchar(10)` | not null | PK (`pk_inventory`) | No | Direct migration |
+| 2 | `qty` | `INT` | `qty` | `integer` | not null | — | No | Direct migration |
+| 3 | *(new)* | *(n/a)* | `version` | `integer` | not null (default 0) | — | N/A | **Added column** — JPA `@Version` for optimistic locking |
 
 **Renaming Details:**
 - No columns renamed — Catalog Service uses HSQLDB-identical lowercase column names.
@@ -394,7 +394,7 @@ CREATE TABLE inventory (
 - `INT` → `integer` (column 2)
 
 **Added Column:**
-- `version` (`integer`, NOT NULL, DEFAULT 0) — Required by the Catalog Service's `InventoryService` for optimistic locking via JPA `@Version` annotation. This column does not exist in the HSQLDB source schema and is populated with `0` for all migrated rows.
+- `version` (`integer`, not null, DEFAULT 0) — Required by the Catalog Service's `InventoryService` for optimistic locking via JPA `@Version` annotation. This column does not exist in the HSQLDB source schema and is populated with `0` for all migrated rows.
 
 ---
 
@@ -402,17 +402,17 @@ CREATE TABLE inventory (
 
 **Source DDL** (from `jpetstore-hsqldb-schema.sql`, lines 17–28):
 ```sql
-CREATE TABLE supplier (
-    suppid INT         NOT NULL,
-    name   VARCHAR(80) NULL,
-    status VARCHAR(2)  NOT NULL,
-    addr1  VARCHAR(80) NULL,
-    addr2  VARCHAR(80) NULL,
-    city   VARCHAR(80) NULL,
-    state  VARCHAR(80) NULL,
-    zip    VARCHAR(5)  NULL,
-    phone  VARCHAR(80) NULL,
-    CONSTRAINT pk_supplier PRIMARY KEY (suppid)
+create table supplier (
+    suppid int         not null,
+    name  varchar(80) null,
+    status varchar(2)  not null,
+    addr1 varchar(80) null,
+    addr2 varchar(80) null,
+    city  varchar(80) null,
+    state varchar(80) null,
+    zip   varchar(5)  null,
+    phone varchar(80) null,
+    constraint pk_supplier primary key (suppid)
 );
 ```
 
@@ -420,15 +420,15 @@ CREATE TABLE supplier (
 
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|
-| 1 | `suppid` | `INT` | `suppid` | `integer` | NOT NULL | PK (`pk_supplier`) | No |
-| 2 | `name` | `VARCHAR(80)` | `name` | `varchar(80)` | NULL | — | No |
-| 3 | `status` | `VARCHAR(2)` | `status` | `varchar(2)` | NOT NULL | — | No |
-| 4 | `addr1` | `VARCHAR(80)` | `addr1` | `varchar(80)` | NULL | — | No |
-| 5 | `addr2` | `VARCHAR(80)` | `addr2` | `varchar(80)` | NULL | — | No |
-| 6 | `city` | `VARCHAR(80)` | `city` | `varchar(80)` | NULL | — | No |
-| 7 | `state` | `VARCHAR(80)` | `state` | `varchar(80)` | NULL | — | No |
-| 8 | `zip` | `VARCHAR(5)` | `zip` | `varchar(5)` | NULL | — | No |
-| 9 | `phone` | `VARCHAR(80)` | `phone` | `varchar(80)` | NULL | — | No |
+| 1 | `suppid` | `INT` | `suppid` | `integer` | not null | PK (`pk_supplier`) | No |
+| 2 | `name` | `VARCHAR(80)` | `name` | `varchar(80)` | null | — | No |
+| 3 | `status` | `VARCHAR(2)` | `status` | `varchar(2)` | not null | — | No |
+| 4 | `addr1` | `VARCHAR(80)` | `addr1` | `varchar(80)` | null | — | No |
+| 5 | `addr2` | `VARCHAR(80)` | `addr2` | `varchar(80)` | null | — | No |
+| 6 | `city` | `VARCHAR(80)` | `city` | `varchar(80)` | null | — | No |
+| 7 | `state` | `VARCHAR(80)` | `state` | `varchar(80)` | null | — | No |
+| 8 | `zip` | `VARCHAR(5)` | `zip` | `varchar(5)` | null | — | No |
+| 9 | `phone` | `VARCHAR(80)` | `phone` | `varchar(80)` | null | — | No |
 
 **Renaming Details:**
 - No columns renamed — Catalog Service uses HSQLDB-identical lowercase column names.
@@ -448,69 +448,70 @@ This database serves the **Order Service** and contains all order, order status,
 
 **Source DDL** (from `jpetstore-hsqldb-schema.sql`, lines 67–94):
 ```sql
-CREATE TABLE orders (
-    orderid          INT            NOT NULL,
-    userid           VARCHAR(80)    NOT NULL,
-    orderdate        DATE           NOT NULL,
-    shipaddr1        VARCHAR(80)    NOT NULL,
-    shipaddr2        VARCHAR(80)    NULL,
-    shipcity         VARCHAR(80)    NOT NULL,
-    shipstate        VARCHAR(80)    NOT NULL,
-    shipzip          VARCHAR(20)    NOT NULL,
-    shipcountry      VARCHAR(20)    NOT NULL,
-    billaddr1        VARCHAR(80)    NOT NULL,
-    billaddr2        VARCHAR(80)    NULL,
-    billcity         VARCHAR(80)    NOT NULL,
-    billstate        VARCHAR(80)    NOT NULL,
-    billzip          VARCHAR(20)    NOT NULL,
-    billcountry      VARCHAR(20)    NOT NULL,
-    courier          VARCHAR(80)    NOT NULL,
-    totalprice       DECIMAL(10,2)  NOT NULL,
-    billtofirstname  VARCHAR(80)    NOT NULL,
-    billtolastname   VARCHAR(80)    NOT NULL,
-    shiptofirstname  VARCHAR(80)    NOT NULL,
-    shiptolastname   VARCHAR(80)    NOT NULL,
-    creditcard       VARCHAR(80)    NOT NULL,
-    exprdate         VARCHAR(7)     NOT NULL,
-    cardtype         VARCHAR(80)    NOT NULL,
-    locale           VARCHAR(80)    NOT NULL,
-    CONSTRAINT pk_orders PRIMARY KEY (orderid)
+create table orders (
+    orderid         int            not null,
+    userid          varchar(80)    not null,
+    orderdate        date           not null,
+    shipaddr1       varchar(80)    not null,
+    shipaddr2       varchar(80)    null,
+    shipcity        varchar(80)    not null,
+    shipstate       varchar(80)    not null,
+    shipzip         varchar(20)    not null,
+    shipcountry     varchar(20)    not null,
+    billaddr1       varchar(80)    not null,
+    billaddr2       varchar(80)    null,
+    billcity        varchar(80)    not null,
+    billstate       varchar(80)    not null,
+    billzip         varchar(20)    not null,
+    billcountry     varchar(20)    not null,
+    courier         varchar(80)    not null,
+    totalprice       decimal(10,2)  not null,
+    billtofirstname varchar(80)    not null,
+    billtolastname  varchar(80)    not null,
+    shiptofirstname varchar(80)    not null,
+    shiptolastname  varchar(80)    not null,
+    creditcard      varchar(80)    not null,
+    exprdate        varchar(7)     not null,
+    cardtype        varchar(80)    not null,
+    locale          varchar(80)    not null,
+    constraint pk_orders primary key (orderid)
 );
 ```
 
-**Column Mapping (25 columns):**
+**Column Mapping (26 columns):**
 
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|
-| 1 | `orderid` | `INT` | `order_id` | `integer` | NOT NULL | PK (`pk_orders`), generated by sequence `order_id_seq` | Yes |
-| 2 | `userid` | `VARCHAR(80)` | `username` | `varchar(80)` | NOT NULL | ⚠️ Cross-service ref → `account.userid` — **NO FK** | Yes (renamed) |
-| 3 | `orderdate` | `DATE` | `order_date` | `timestamp with time zone` | NOT NULL | — | Yes |
-| 4 | `shipaddr1` | `VARCHAR(80)` | `ship_addr1` | `varchar(80)` | NOT NULL | — | Yes |
-| 5 | `shipaddr2` | `VARCHAR(80)` | `ship_addr2` | `varchar(80)` | NULL | — | Yes |
-| 6 | `shipcity` | `VARCHAR(80)` | `ship_city` | `varchar(80)` | NOT NULL | — | Yes |
-| 7 | `shipstate` | `VARCHAR(80)` | `ship_state` | `varchar(80)` | NOT NULL | — | Yes |
-| 8 | `shipzip` | `VARCHAR(20)` | `ship_zip` | `varchar(20)` | NOT NULL | — | Yes |
-| 9 | `shipcountry` | `VARCHAR(20)` | `ship_country` | `varchar(20)` | NOT NULL | — | Yes |
-| 10 | `billaddr1` | `VARCHAR(80)` | `bill_addr1` | `varchar(80)` | NOT NULL | — | Yes |
-| 11 | `billaddr2` | `VARCHAR(80)` | `bill_addr2` | `varchar(80)` | NULL | — | Yes |
-| 12 | `billcity` | `VARCHAR(80)` | `bill_city` | `varchar(80)` | NOT NULL | — | Yes |
-| 13 | `billstate` | `VARCHAR(80)` | `bill_state` | `varchar(80)` | NOT NULL | — | Yes |
-| 14 | `billzip` | `VARCHAR(20)` | `bill_zip` | `varchar(20)` | NOT NULL | — | Yes |
-| 15 | `billcountry` | `VARCHAR(20)` | `bill_country` | `varchar(20)` | NOT NULL | — | Yes |
-| 16 | `courier` | `VARCHAR(80)` | `courier` | `varchar(80)` | NOT NULL | — | No |
-| 17 | `totalprice` | `DECIMAL(10,2)` | `total_price` | `numeric(10,2)` | NOT NULL | — | Yes |
-| 18 | `billtofirstname` | `VARCHAR(80)` | `bill_to_first_name` | `varchar(80)` | NOT NULL | — | Yes |
-| 19 | `billtolastname` | `VARCHAR(80)` | `bill_to_last_name` | `varchar(80)` | NOT NULL | — | Yes |
-| 20 | `shiptofirstname` | `VARCHAR(80)` | `ship_to_first_name` | `varchar(80)` | NOT NULL | — | Yes |
-| 21 | `shiptolastname` | `VARCHAR(80)` | `ship_to_last_name` | `varchar(80)` | NOT NULL | — | Yes |
-| 22 | `creditcard` | `VARCHAR(80)` | `credit_card` | `varchar(80)` | NOT NULL | — | Yes |
-| 23 | `exprdate` | `VARCHAR(7)` | `expr_date` | `varchar(7)` | NOT NULL | — | Yes |
-| 24 | `cardtype` | `VARCHAR(80)` | `card_type` | `varchar(80)` | NOT NULL | — | Yes |
-| 25 | `locale` | `VARCHAR(80)` | `locale` | `varchar(80)` | NOT NULL | — | No |
+| 1 | `orderid` | `INT` | `order_id` | `integer` | not null | PK (`pk_orders`), generated by sequence `order_id_seq` | Yes |
+| 2 | `userid` | `VARCHAR(80)` | `userid` | `varchar(80)` | not null | ⚠️ Cross-service ref → `account.userid` — **NO FK** | No (retained) |
+| 3 | `orderdate` | `DATE` | `order_date` | `timestamp with time zone` | not null | — | Yes |
+| 4 | `shipaddr1` | `VARCHAR(80)` | `ship_addr1` | `varchar(80)` | not null | — | Yes |
+| 5 | `shipaddr2` | `VARCHAR(80)` | `ship_addr2` | `varchar(80)` | null | — | Yes |
+| 6 | `shipcity` | `VARCHAR(80)` | `ship_city` | `varchar(80)` | not null | — | Yes |
+| 7 | `shipstate` | `VARCHAR(80)` | `ship_state` | `varchar(80)` | not null | — | Yes |
+| 8 | `shipzip` | `VARCHAR(20)` | `ship_zip` | `varchar(20)` | not null | — | Yes |
+| 9 | `shipcountry` | `VARCHAR(20)` | `ship_country` | `varchar(20)` | not null | — | Yes |
+| 10 | `billaddr1` | `VARCHAR(80)` | `bill_addr1` | `varchar(80)` | not null | — | Yes |
+| 11 | `billaddr2` | `VARCHAR(80)` | `bill_addr2` | `varchar(80)` | null | — | Yes |
+| 12 | `billcity` | `VARCHAR(80)` | `bill_city` | `varchar(80)` | not null | — | Yes |
+| 13 | `billstate` | `VARCHAR(80)` | `bill_state` | `varchar(80)` | not null | — | Yes |
+| 14 | `billzip` | `VARCHAR(20)` | `bill_zip` | `varchar(20)` | not null | — | Yes |
+| 15 | `billcountry` | `VARCHAR(20)` | `bill_country` | `varchar(20)` | not null | — | Yes |
+| 16 | `courier` | `VARCHAR(80)` | `courier` | `varchar(80)` | not null | — | No |
+| 17 | `totalprice` | `DECIMAL(10,2)` | `total_price` | `numeric(10,2)` | not null | — | Yes |
+| 18 | `billtofirstname` | `VARCHAR(80)` | `bill_to_first_name` | `varchar(80)` | not null | — | Yes |
+| 19 | `billtolastname` | `VARCHAR(80)` | `bill_to_last_name` | `varchar(80)` | not null | — | Yes |
+| 20 | `shiptofirstname` | `VARCHAR(80)` | `ship_to_first_name` | `varchar(80)` | not null | — | Yes |
+| 21 | `shiptolastname` | `VARCHAR(80)` | `ship_to_last_name` | `varchar(80)` | not null | — | Yes |
+| 22 | `creditcard` | `VARCHAR(80)` | `credit_card` | `varchar(80)` | not null | — | Yes |
+| 23 | `exprdate` | `VARCHAR(7)` | `expr_date` | `varchar(7)` | not null | — | Yes |
+| 24 | `cardtype` | `VARCHAR(80)` | `card_type` | `varchar(80)` | not null | — | Yes |
+| 25 | `locale` | `VARCHAR(80)` | `locale` | `varchar(80)` | not null | — | No |
+| 26 | _(NEW)_ | — | `status` | `varchar(20)` | null | Default: `'PENDING'` | N/A (new column for Saga orchestration) |
 
 **Renaming Details:**
 - `orderid` → `order_id`
-- `userid` → `username` — renamed to match application semantics (stores username, no FK to account table)
+- `userid` — retained as `userid` (not renamed; Liquibase changelog comment: "Retains original HSQLDB column name for migration data consistency")
 - `orderdate` → `order_date`
 - `shipaddr1` → `ship_addr1`, `shipaddr2` → `ship_addr2`
 - `shipcity` → `ship_city`, `shipstate` → `ship_state`, `shipzip` → `ship_zip`, `shipcountry` → `ship_country`
@@ -522,7 +523,10 @@ CREATE TABLE orders (
 - `creditcard` → `credit_card`
 - `exprdate` → `expr_date`
 - `cardtype` → `card_type`
-- `courier`, `locale` — already lowercase, preserved as-is
+- `courier`, `locale`, `userid` — already lowercase, preserved as-is
+
+**New Column (not in HSQLDB):**
+- Column 26: `status` `varchar(20)` — added for Saga orchestration state tracking. Values: `PENDING`, `CONFIRMED`, `FAILED`. Default: `'PENDING'`. Not present in the HSQLDB schema; populated with `'CONFIRMED'` for all migrated legacy orders.
 
 **Data Type Changes:**
 - `INT` → `integer` (column 1)
@@ -533,7 +537,7 @@ CREATE TABLE orders (
 - The `order_id` PK is generated by PostgreSQL native sequence `order_id_seq`, replacing the HSQLDB `sequence` table's row `('ordernum', ...)`. See [Section 9: Sequence Replacement](#9-sequence-replacement) for details.
 
 **Cross-Service Reference:**
-- `username` references `account.userid` in the Account database — **NO foreign key constraint** in PostgreSQL. Referential integrity is enforced at the application layer by the Order Service calling `GET /api/accounts/{username}` on the Account Service before order creation.
+- `userid` references `account.userid` in the Account database — **NO foreign key constraint** in PostgreSQL. Referential integrity is enforced at the application layer by the Order Service calling `GET /api/accounts/{username}` on the Account Service before order creation.
 
 ---
 
@@ -541,12 +545,12 @@ CREATE TABLE orders (
 
 **Source DDL** (from `jpetstore-hsqldb-schema.sql`, lines 96–102):
 ```sql
-CREATE TABLE orderstatus (
-    orderid   INT        NOT NULL,
-    linenum   INT        NOT NULL,
-    timestamp DATE       NOT NULL,
-    status    VARCHAR(2) NOT NULL,
-    CONSTRAINT pk_orderstatus PRIMARY KEY (orderid, linenum)
+create table orderstatus (
+    orderid  int        not null,
+    linenum  int        not null,
+    timestamp date       not null,
+    status   varchar(2) not null,
+    constraint pk_orderstatus primary key (orderid, linenum)
 );
 ```
 
@@ -554,10 +558,10 @@ CREATE TABLE orderstatus (
 
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|
-| 1 | `orderid` | `INT` | `order_id` | `integer` | NOT NULL | Composite PK (part 1) | Yes |
-| 2 | `linenum` | `INT` | `line_num` | `integer` | NOT NULL | Composite PK (part 2) | Yes |
-| 3 | `timestamp` | `DATE` | `timestamp` | `timestamp with time zone` | NOT NULL | — | No |
-| 4 | `status` | `VARCHAR(2)` | `status` | `varchar(2)` | NOT NULL | — | No |
+| 1 | `orderid` | `INT` | `order_id` | `integer` | not null | Composite PK (part 1) | Yes |
+| 2 | `linenum` | `INT` | `line_num` | `integer` | not null | Composite PK (part 2) | Yes |
+| 3 | `timestamp` | `DATE` | `timestamp` | `timestamp with time zone` | not null | — | No |
+| 4 | `status` | `VARCHAR(2)` | `status` | `varchar(20)` | not null | — | No (type widened) |
 
 **Renaming Details:**
 - `orderid` → `order_id`
@@ -567,6 +571,7 @@ CREATE TABLE orderstatus (
 **Data Type Changes:**
 - `INT` → `integer` (columns 1, 2)
 - `DATE` → `timestamp with time zone` (column 3) — see [Timezone Assumptions](#timezone-assumptions)
+- `VARCHAR(2)` → `varchar(20)` (column 4) — widened to accommodate Saga orchestration state values (e.g., `PENDING`, `COMPLETED`, `COMPENSATING`, `FAILED`) in addition to the original monolith value (`P`)
 
 **Primary Key:**
 - Composite PK: (`order_id`, `line_num`)
@@ -577,13 +582,13 @@ CREATE TABLE orderstatus (
 
 **Source DDL** (from `jpetstore-hsqldb-schema.sql`, lines 104–111):
 ```sql
-CREATE TABLE lineitem (
-    orderid   INT            NOT NULL,
-    linenum   INT            NOT NULL,
-    itemid    VARCHAR(10)    NOT NULL,
-    quantity  INT            NOT NULL,
-    unitprice DECIMAL(10,2)  NOT NULL,
-    CONSTRAINT pk_lineitem PRIMARY KEY (orderid, linenum)
+create table lineitem (
+    orderid  int            not null,
+    linenum  int            not null,
+    itemid   varchar(10)    not null,
+    quantity int            not null,
+    unitprice decimal(10,2)  not null,
+    constraint pk_lineitem primary key (orderid, linenum)
 );
 ```
 
@@ -591,11 +596,11 @@ CREATE TABLE lineitem (
 
 | # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed |
 |---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|
-| 1 | `orderid` | `INT` | `order_id` | `integer` | NOT NULL | Composite PK (part 1) | Yes |
-| 2 | `linenum` | `INT` | `line_num` | `integer` | NOT NULL | Composite PK (part 2) | Yes |
-| 3 | `itemid` | `VARCHAR(10)` | `item_id` | `varchar(10)` | NOT NULL | ⚠️ Cross-service ref → `item.item_id` — **NO FK** | Yes |
-| 4 | `quantity` | `INT` | `quantity` | `integer` | NOT NULL | — | No |
-| 5 | `unitprice` | `DECIMAL(10,2)` | `unit_price` | `numeric(10,2)` | NOT NULL | — | Yes |
+| 1 | `orderid` | `INT` | `order_id` | `integer` | not null | Composite PK (part 1) | Yes |
+| 2 | `linenum` | `INT` | `line_num` | `integer` | not null | Composite PK (part 2) | Yes |
+| 3 | `itemid` | `VARCHAR(10)` | `item_id` | `varchar(10)` | not null | ⚠️ Cross-service ref → `item.item_id` — **NO FK** | Yes |
+| 4 | `quantity` | `INT` | `quantity` | `integer` | not null | — | No |
+| 5 | `unitprice` | `DECIMAL(10,2)` | `unit_price` | `numeric(10,2)` | not null | — | Yes |
 
 **Renaming Details:**
 - `orderid` → `order_id`
@@ -616,33 +621,62 @@ CREATE TABLE lineitem (
 
 ---
 
-### 6.4 Table: `sequence`
+### 6.4 Table: `sequence` — NOT MIGRATED
 
 **Source DDL** (from `jpetstore-hsqldb-schema.sql`, lines 160–165):
 ```sql
-CREATE TABLE sequence (
-    name   VARCHAR(30) NOT NULL,
-    nextid INT         NOT NULL,
-    CONSTRAINT pk_sequence PRIMARY KEY (name)
+create table sequence (
+    name   varchar(30) not null,
+    nextid int         not null,
+    constraint pk_sequence primary key (name)
 );
 ```
 
-**Column Mapping (2 columns):**
-
-| # | HSQLDB Column | HSQLDB Type | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Renamed |
-|---|---------------|-------------|-------------------|-----------------|----------|-------------|---------|
-| 1 | `name` | `VARCHAR(30)` | `name` | `varchar(30)` | NOT NULL | PK (`pk_sequence`) | No |
-| 2 | `nextid` | `INT` | `nextid` | `integer` | NOT NULL | — | No |
-
-**Renaming Details:**
-- No columns renamed — `sequence` table is a deprecated reference table (see note below) and uses HSQLDB-identical names.
-
-**Data Type Changes:**
-- `INT` → `integer` (column 2)
-
-> **⚠️ IMPORTANT — DEPRECATED TABLE**
+> **⚠️ NOT MIGRATED — Replaced by PostgreSQL Native Sequence**
 >
-> This table is being **replaced** by PostgreSQL native sequences in the Order Service. The HSQLDB `sequence` table row `('ordernum', <nextid>)` is superseded by the PostgreSQL sequence `order_id_seq`. The table is migrated to PostgreSQL for **reference and audit purposes only** — the application code in the Order Service no longer reads from or writes to this table. See [Section 9: Sequence Replacement](#9-sequence-replacement) for full details.
+> This table is **NOT created** in the Order Service PostgreSQL database. Its functionality is entirely replaced by the PostgreSQL native sequence `order_id_seq`. The HSQLDB `sequence` table row `('ordernum', <nextid>)` is superseded by `CREATE SEQUENCE order_id_seq`. No `CREATE TABLE sequence` exists in the Order Service Liquibase changelog. See [Section 9: Sequence Replacement](#9-sequence-replacement) for full details.
+>
+> The column mapping below is provided for **reference only** — it documents the HSQLDB source schema but there is no corresponding PostgreSQL target table.
+
+| # | HSQLDB Column | HSQLDB Type | Migration Status |
+|---|---------------|-------------|-----------------|
+| 1 | `name` | `VARCHAR(30)` | Not migrated — replaced by sequence name `order_id_seq` |
+| 2 | `nextid` | `INT` | Not migrated — replaced by `NEXTVAL('order_id_seq')` |
+
+---
+
+## 6A. New PostgreSQL-Only Tables (No HSQLDB Source)
+
+The following tables exist **only** in the PostgreSQL microservice databases and have no counterpart in the HSQLDB monolith schema. They were created to support microservice-specific features (optimistic locking, Saga orchestration, idempotent inventory reservations).
+
+### 6A.1 Table: `inventory_reservation` (Catalog DB — `jpetstore_catalog`)
+
+**Purpose**: Stores inventory reservation records for idempotent inventory decrement/restore operations during Saga-based order processing.
+
+| # | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Description |
+|---|-------------------|-----------------|----------|-------------|-------------|
+| 1 | `id` | `bigint` | not null | PK (auto-generated) | Surrogate primary key |
+| 2 | `item_id` | `varchar(10)` | not null | — | Item being reserved |
+| 3 | `order_id` | `varchar(80)` | not null | — | Idempotency key (order requesting reservation) |
+| 4 | `quantity` | `integer` | not null | — | Quantity reserved |
+| 5 | `reserved_at` | `timestamp with time zone` | not null | — | When the reservation was created |
+
+> **Note**: This table supports the idempotency guarantee for inventory decrement calls — duplicate requests with the same `order_id` + `item_id` return success without double-decrementing.
+
+### 6A.2 Table: `order_saga_state` (Order DB — `jpetstore_order`)
+
+**Purpose**: Persists Saga orchestration state for the distributed order transaction, enabling recovery from failures and tracking progress.
+
+| # | PostgreSQL Column | PostgreSQL Type | Nullable | Constraints | Description |
+|---|-------------------|-----------------|----------|-------------|-------------|
+| 1 | `saga_id` | `varchar(36)` | not null | PK | Unique Saga execution ID (UUID) |
+| 2 | `order_id` | `integer` | not null | — | Associated order ID |
+| 3 | `current_step` | `varchar(50)` | not null | — | Current Saga step (e.g., `CREATE_ORDER`, `RESERVE_INVENTORY`, `CONFIRM_ORDER`) |
+| 4 | `status` | `varchar(20)` | not null | — | Saga status: `PENDING`, `INVENTORY_RESERVED`, `COMPLETED`, `COMPENSATING`, `FAILED` |
+| 5 | `created_at` | `timestamp with time zone` | not null | — | Saga creation timestamp |
+| 6 | `updated_at` | `timestamp with time zone` | not null | — | Last status update timestamp |
+
+> **Note**: The `status` values in this table (`COMPLETED`, `FAILED`, etc.) track the **Saga's internal orchestration state** and are distinct from the business-facing `orders.status` column (`CONFIRMED`, `FAILED`). `COMPLETED` (saga) corresponds to `CONFIRMED` (order).
 
 ---
 
@@ -666,7 +700,7 @@ The following two logical foreign key relationships span different bounded conte
 | Property | Value |
 |----------|-------|
 | **Source (HSQLDB)** | `orders.userid` references `account.userid` — no explicit FK constraint in DDL |
-| **Target (PostgreSQL)** | `orders.username` (Order DB, renamed) references `account.userid` (Account DB, HSQLDB-identical) — stored as plain `varchar(80)` field with **NO FK constraint** |
+| **Target (PostgreSQL)** | `orders.userid` (Order DB, retained) references `account.userid` (Account DB, HSQLDB-identical) — stored as plain `varchar(80)` field with **NO FK constraint** |
 | **Source Database** | `jpetstore_order` (Order Service) |
 | **Target Database** | `jpetstore_account` (Account Service) |
 | **Application-Layer Enforcement** | Order Service validates user existence via synchronous REST call: `GET /api/accounts/{username}` on Account Service before creating an order |
@@ -676,16 +710,16 @@ The following two logical foreign key relationships span different bounded conte
 
 ## 8. Index Mapping
 
-The HSQLDB schema defines 3 indexes. All are on tables in the Catalog database and are preserved in PostgreSQL with snake_case naming.
+The HSQLDB schema defines 3 indexes. All are on tables in the Catalog database and are preserved in PostgreSQL with their **original HSQLDB index names** (no renaming applied).
 
 | # | HSQLDB Index Name | Table | HSQLDB Column(s) | PostgreSQL Index Name | PostgreSQL Column(s) | Database |
 |---|-------------------|-------|-------------------|----------------------|---------------------|----------|
-| 1 | `productCat` | `product` | `category` | `idx_product_category` | `category` | `jpetstore_catalog` |
-| 2 | `productName` | `product` | `name` | `idx_product_name` | `name` | `jpetstore_catalog` |
-| 3 | `itemProd` | `item` | `productid` | `idx_item_productid` | `productid` | `jpetstore_catalog` |
+| 1 | `productCat` | `product` | `category` | `productCat` | `category` | `jpetstore_catalog` |
+| 2 | `productName` | `product` | `name` | `productName` | `name` | `jpetstore_catalog` |
+| 3 | `itemProd` | `item` | `productid` | `itemProd` | `productid` | `jpetstore_catalog` |
 
 **Notes:**
-- Index names are converted to `idx_<table>_<column>` convention for consistency.
+- Index names are **retained exactly as defined in HSQLDB** (matching the Liquibase `indexName` attributes). No `idx_*` renaming convention is applied.
 - All indexes are non-unique, single-column B-tree indexes — same as the HSQLDB originals.
 - Catalog Service uses HSQLDB-identical column names, so index column references are unchanged (e.g., `productid` remains `productid`).
 
@@ -730,37 +764,40 @@ The `sequence` table's functionality is **replaced** by PostgreSQL native sequen
 
 ### Table Distribution
 
-| Database | Bounded Context | Table Count | Column Count |
-|----------|----------------|-------------|-------------|
-| `jpetstore_account` | Account / User Management | 4 | 21 |
-| `jpetstore_catalog` | Catalog / Inventory | 5 | 30 (includes 1 added `version` column) |
-| `jpetstore_order` | Order / Cart | 4 | 36 |
-| **Total** | | **13** | **87** (86 migrated + 1 added) |
+| Database | Bounded Context | HSQLDB Tables Migrated | New PostgreSQL-Only Tables | Total Tables | Total Columns |
+|----------|----------------|----------------------|--------------------------|-------------|--------------|
+| `jpetstore_account` | Account / User Management | 4 | 0 | 4 | 21 |
+| `jpetstore_catalog` | Catalog / Inventory | 5 | 1 (`inventory_reservation`) | 6 | 36 (30 migrated + 1 added `version` + 5 new table) |
+| `jpetstore_order` | Order / Cart | 3 (`sequence` NOT migrated) | 1 (`order_saga_state`) | 4 | 41 (35 migrated + 1 added `status` + 6 new table — excludes unmigrated `sequence`) |
+| **Total** | | **12** (of 13; `sequence` not migrated) | **2** | **14** | **98** |
 
 ### Data Type Conversion Summary
 
-| HSQLDB Type | PostgreSQL Type | Occurrences |
-|-------------|----------------|-------------|
-| `VARCHAR(n)` | `varchar(n)` | 68 columns |
-| `INT` | `integer` | 16 columns |
-| `DECIMAL(10,2)` | `numeric(10,2)` | 4 columns |
-| `DATE` | `timestamp with time zone` | 2 columns (`orders.order_date`, `orderstatus.timestamp`) |
+| HSQLDB Type | PostgreSQL Type | Occurrences | Notes |
+|-------------|----------------|-------------|-------|
+| `VARCHAR(n)` | `varchar(n)` | 66 columns | Length preserved (except `orderstatus.status`: widened from `varchar(2)` to `varchar(20)`) |
+| `INT` | `integer` | 14 columns | Standard integer mapping |
+| `INT` | `boolean` | 2 columns | `profile.mylistopt`, `profile.banneropt` — 0→false, non-zero→true |
+| `DECIMAL(10,2)` | `numeric(10,2)` | 4 columns | Precision and scale preserved |
+| `DATE` | `timestamp with time zone` | 2 columns | `orders.order_date`, `orderstatus.timestamp` — timezone awareness for distributed system |
+| `VARCHAR(2)` | `varchar(20)` | 1 column | `orderstatus.status` — widened for Saga state values (`PENDING`, `COMPLETED`, `COMPENSATING`, `FAILED`) |
 
 ### Column Renaming Summary
 
 | Category | Count | Examples |
 |----------|-------|---------|
 | Order Service columns renamed to snake_case | 22 | `orderid` → `order_id`, `billtofirstname` → `bill_to_first_name` |
-| Order Service columns renamed (semantic) | 1 | `userid` → `username` |
-| Account/Catalog columns preserved (HSQLDB-identical) | 63 | `userid`, `firstname`, `catid`, `productid`, `email`, `status` |
-| Columns added (not in HSQLDB) | 1 | `inventory.version` for optimistic locking |
+| Order Service columns retained (HSQLDB-identical) | 4 | `userid`, `courier`, `locale`, `quantity` |
+| Account/Catalog columns preserved (HSQLDB-identical) | 51 | `userid`, `firstname`, `catid`, `productid`, `email`, `status` |
+| Columns added (not in HSQLDB) | 2 | `inventory.version` (optimistic locking), `orders.status` (Saga state) |
+| New PostgreSQL-only tables | 2 | `inventory_reservation` (5 cols), `order_saga_state` (6 cols) |
 
 ### Constraint Summary
 
 | Constraint Type | Count | Details |
 |----------------|-------|---------|
-| Primary Keys preserved | 13 | One per table (2 composite PKs: `orderstatus`, `lineitem`) |
+| Primary Keys preserved | 12 | One per migrated table (2 composite PKs: `orderstatus`, `lineitem`; `sequence` not migrated) |
 | Intra-service FKs preserved | 3 | `product.category → category.catid`, `item.productid → product.productid`, `item.supplier → supplier.suppid` |
-| Cross-service FKs removed | 2 | `orders.username → account.userid`, `lineitem.item_id → item.itemid` |
-| Indexes preserved | 3 | `idx_product_category`, `idx_product_name`, `idx_item_productid` |
+| Cross-service FKs removed | 2 | `orders.userid → account.userid`, `lineitem.item_id → item.itemid` |
+| Indexes preserved | 3 | `productCat`, `productName`, `itemProd` (original HSQLDB names retained) |
 | Sequences added | 1 | `order_id_seq` (replaces `sequence` table) |
