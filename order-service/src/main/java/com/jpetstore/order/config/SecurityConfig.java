@@ -1,0 +1,164 @@
+/*
+ *    Copyright 2010-2026 the original author or authors.
+ *
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
+ *
+ *       https://www.apache.org/licenses/LICENSE-2.0
+ *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS,
+ *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *    See the License for the specific language governing permissions and
+ *    limitations under the License.
+ */
+package com.jpetstore.order.config;
+
+import com.jpetstore.order.security.JwtAuthenticationFilter;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.HttpStatusEntryPoint;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+
+/**
+ * Spring Security configuration for the Order Service.
+ *
+ * <p>Provides defense-in-depth security headers (X-Content-Type-Options: nosniff,
+ * X-Frame-Options: DENY, Cache-Control, etc.) matching the security posture of
+ * the Account Service and Catalog Service.</p>
+ *
+ * <h3>Security Model</h3>
+ * <ul>
+ *   <li><strong>Cart endpoints</strong> ({@code /api/cart/**}): Permit anonymous access.
+ *       Per AAP §0.7.2, unauthenticated users can browse and build a cart before
+ *       signing in. The anonymous cart is identified by a session cookie.</li>
+ *   <li><strong>Order endpoints</strong> ({@code /api/orders/**}): Currently permit all
+ *       requests. Authentication enforcement is handled at the API Gateway layer via
+ *       {@code JwtAuthenticationFilter} (per AAP §0.7.6). When full JWT validation is
+ *       deployed within the service, this configuration can be updated to require
+ *       authentication on order endpoints.</li>
+ *   <li><strong>Actuator endpoints</strong> ({@code /actuator/**}): Permit all for
+ *       health checks and readiness probes used by container orchestration.</li>
+ * </ul>
+ *
+ * <h3>Session Management</h3>
+ * <p>Stateless session policy (STATELESS) — per the microservices design, each service
+ * is stateless and authentication state is carried via JWT tokens, not server-side
+ * sessions. This aligns with the session externalization strategy (AAP §0.7.2).</p>
+ *
+ * <h3>CSRF Protection</h3>
+ * <p>CSRF is disabled because this is a REST API consumed by programmatic clients
+ * (the monolith's ActionBeans via RestTemplate, the API Gateway, and inter-service
+ * REST clients). Browser-based CSRF protection is handled at the monolith layer.</p>
+ *
+ * @author Blitzy Platform
+ * @see org.springframework.security.web.SecurityFilterChain
+ */
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+
+    /** HMAC-SHA secret key for JWT signature verification (shared with Account Service and Gateway). */
+    @Value("${jwt.secret:jpetstore-shared-jwt-secret-key-change-in-production-minimum-256-bits}")
+    private String jwtSecret;
+
+    /** Expected issuer claim for JWT tokens. */
+    @Value("${jwt.issuer:jpetstore}")
+    private String jwtIssuer;
+
+    /**
+     * Creates the JWT authentication filter for defense-in-depth validation.
+     *
+     * <p>This filter validates JWT tokens directly on the Order Service so that
+     * even if the service port (8083) is directly accessible (bypassing the API
+     * Gateway), requests to protected order endpoints are still authenticated.</p>
+     *
+     * @return the configured {@link JwtAuthenticationFilter} instance
+     */
+    @Bean
+    public JwtAuthenticationFilter jwtAuthenticationFilter() {
+        return new JwtAuthenticationFilter(jwtSecret, jwtIssuer);
+    }
+
+    /**
+     * Configures the HTTP security filter chain for the Order Service.
+     *
+     * <p>Provides defense-in-depth authentication on order endpoints while keeping
+     * cart endpoints and actuator health checks publicly accessible:</p>
+     * <ul>
+     *   <li><strong>Cart endpoints</strong> ({@code /api/cart/**}): Permit anonymous access.
+     *       Per AAP §0.7.2, unauthenticated users can browse and build a cart.</li>
+     *   <li><strong>Actuator health/info</strong> ({@code /actuator/health}, {@code /actuator/info}):
+     *       Permit all for container orchestration probes.</li>
+     *   <li><strong>Order endpoints</strong> ({@code /api/orders/**}): Require JWT authentication.
+     *       Prevents unauthenticated access even when the service is directly reachable.</li>
+     *   <li><strong>All other endpoints</strong>: Require authentication by default.</li>
+     * </ul>
+     *
+     * <p>Security headers enabled by {@code Customizer.withDefaults()}:</p>
+     * <ul>
+     *   <li>{@code X-Content-Type-Options: nosniff}</li>
+     *   <li>{@code X-Frame-Options: DENY}</li>
+     *   <li>{@code Cache-Control: no-cache, no-store, max-age=0, must-revalidate}</li>
+     *   <li>{@code X-XSS-Protection: 0}</li>
+     * </ul>
+     *
+     * @param http the {@link HttpSecurity} builder to configure
+     * @return the configured {@link SecurityFilterChain}
+     * @throws Exception if security configuration fails
+     */
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        http
+                // Disable CSRF — REST API consumed by programmatic clients, not browsers
+                .csrf(csrf -> csrf.disable())
+
+                // Register JWT filter before Spring Security's UsernamePasswordAuthenticationFilter
+                .addFilterBefore(jwtAuthenticationFilter(),
+                        UsernamePasswordAuthenticationFilter.class)
+
+                // Path-based authorization rules for defense-in-depth
+                .authorizeHttpRequests(auth -> auth
+                        // Cart endpoints are public (AAP §0.7.2 — anonymous cart)
+                        .requestMatchers("/api/cart/**").permitAll()
+                        // Actuator health and info for orchestration probes
+                        .requestMatchers("/actuator/health", "/actuator/health/**",
+                                "/actuator/info").permitAll()
+                        // Order endpoints require authentication
+                        .requestMatchers("/api/orders/**").authenticated()
+                        // Allow unauthenticated access to the Spring Boot error endpoint.
+                        // When @Valid bean validation fails (e.g., MethodArgumentNotValidException),
+                        // Spring Boot internally forwards the request to /error via BasicErrorController.
+                        // Without this rule, the error dispatch falls under anyRequest().authenticated(),
+                        // and because the SecurityContext is not propagated to the ERROR dispatch,
+                        // the response becomes 401 Unauthorized instead of the correct 400 Bad Request
+                        // with validation error details. This matches the pattern already implemented
+                        // in Account Service's SecurityConfig.
+                        .requestMatchers("/error").permitAll()
+                        // All other endpoints require authentication by default
+                        .anyRequest().authenticated()
+                )
+
+                // Return 401 instead of redirect to login page for unauthorized requests
+                .exceptionHandling(ex -> ex
+                        .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
+
+                // Stateless session — no server-side session; JWT-based authentication
+                .sessionManagement(session -> session
+                        .sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+
+                // Enable default security headers for defense-in-depth
+                .headers(Customizer.withDefaults());
+
+        return http.build();
+    }
+}

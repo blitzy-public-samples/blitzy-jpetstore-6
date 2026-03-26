@@ -1,0 +1,137 @@
+# =============================================================================
+# JPetStore API Gateway — Spring Cloud Gateway Configuration
+# =============================================================================
+# Single public entry point for the JPetStore microservices architecture.
+# Implements the Strangler Fig pattern with runtime-configurable per-service
+# routing flags stored in Redis.
+#
+# IMPORTANT: Spring Cloud Gateway is REACTIVE (Netty/WebFlux).
+# No server.servlet.* properties are permitted.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Server Configuration
+# -----------------------------------------------------------------------------
+server:
+  port: 8080
+
+# -----------------------------------------------------------------------------
+# Spring Application Configuration
+# -----------------------------------------------------------------------------
+spring:
+  application:
+    name: api-gateway
+
+  # ---------------------------------------------------------------------------
+  # Spring Cloud Gateway Route Definitions
+  # ---------------------------------------------------------------------------
+  # All 11 routes are defined PROGRAMMATICALLY in RouteConfig.java (the single
+  # source of truth). YAML route definitions have been removed to avoid
+  # duplication and deprecated property key warnings. Routes are organized into:
+  #   1. Flag-controlled Strangler Fig routes (*.action — default to monolith)
+  #   2. Static microservice API routes (always route to microservices)
+  #   3. Static asset routes (always route to monolith)
+  #   4. Catch-all fallback (lowest priority — routes to monolith)
+  # See RouteConfig.java for the complete route table.
+  # ---------------------------------------------------------------------------
+
+  # ---------------------------------------------------------------------------
+  # Redis Connection Configuration
+  # ---------------------------------------------------------------------------
+  # Redis is used for storing routing flags (Strangler Fig per-service flags)
+  # and can also store externalized session/cart state.
+  # Defaults use Docker Compose service name 'redis', overridable via env vars.
+  # Docker Compose sets SPRING_DATA_REDIS_HOST and SPRING_DATA_REDIS_PORT, which
+  # Spring Boot's relaxed binding automatically maps to spring.data.redis.host/port.
+  # The env var placeholders below use the same SPRING_DATA_REDIS_* naming convention
+  # for consistency with the docker-compose.yml environment block.
+  # ---------------------------------------------------------------------------
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:redis}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+      timeout: 2000
+
+# =============================================================================
+# Routing Flag Configuration (Custom Properties)
+# =============================================================================
+# Per-service routing flags consumed by RoutingFlagConfig.java.
+# ALL flags default to "monolith" — the system starts in full-monolith mode.
+# Services are cut over one at a time (Catalog -> Account -> Order) by changing
+# the Redis value from "monolith" to "microservice" — no redeployment required.
+# =============================================================================
+routing:
+  flags:
+    account-service: monolith
+    catalog-service: monolith
+    order-service: monolith
+    cache-ttl-seconds: 1
+    redis-key-prefix: "routing.flag."
+
+# =============================================================================
+# JWT Configuration (Custom Properties)
+# =============================================================================
+# JWT settings consumed by AuthenticationFilter for validating tokens on
+# protected paths. The secret MUST be externalized via environment variable
+# for production deployments.
+# =============================================================================
+jwt:
+  secret: ${JWT_SECRET:jpetstore-jwt-secret-key-for-development-only-change-in-production}
+  issuer: jpetstore
+  expiration: 3600
+
+# =============================================================================
+# Spring Boot Actuator Configuration
+# =============================================================================
+# Health checks for container orchestration and operational monitoring.
+# =============================================================================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+    # Disable the gateway routes actuator endpoint. Spring Cloud Gateway's
+    # /actuator/gateway/routes endpoint eagerly resolves all route destination
+    # hostnames during introspection. When the monolith container is not running,
+    # DNS resolution for 'monolith' fails, causing a 500 Internal Server Error.
+    # Since the health and info endpoints (used by Docker healthchecks and
+    # operational monitoring) work independently of route targets, disabling
+    # the gateway actuator endpoint prevents spurious 500 errors without
+    # affecting any runtime routing or health check functionality.
+    gateway:
+      access: none
+
+# =============================================================================
+# Service URL Configuration (Custom Properties)
+# =============================================================================
+# Backend service URLs consumed by RouteConfig.java and other configuration
+# classes. All URLs use Docker Compose service hostnames as defaults,
+# overridable via environment variables.
+#
+# Port assignments per AAP Section 0.7.6:
+#   Monolith:        8080
+#   Account Service: 8081
+#   Catalog Service: 8082
+#   Order Service:   8083
+# =============================================================================
+services:
+  monolith:
+    url: ${MONOLITH_URL:http://monolith:8080}
+  account:
+    url: ${ACCOUNT_SERVICE_URL:http://account-service:8081}
+  catalog:
+    url: ${CATALOG_SERVICE_URL:http://catalog-service:8082}
+  order:
+    url: ${ORDER_SERVICE_URL:http://order-service:8083}
+
+# =============================================================================
+# Logging Configuration
+# =============================================================================
+logging:
+  level:
+    org.springframework.cloud.gateway: INFO
+    com.jpetstore.gateway: DEBUG
+    reactor.netty: INFO

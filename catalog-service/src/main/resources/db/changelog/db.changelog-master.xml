@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Liquibase Master Changelog for Catalog Service (Catalog/Inventory Bounded Context)
+
+        This file is the entry point for all database schema management for the
+        Catalog Service microservice. It is referenced by application.yml via:
+            spring.liquibase.change-log=classpath:db/changelog/db.changelog-master.xml
+
+        The Catalog Service owns 5 PostgreSQL tables derived from the monolith's
+        HSQLDB schema (jpetstore-hsqldb-schema.sql):
+            - supplier   (suppid PK)
+            - category   (catid PK)
+            - product    (productid PK, FK to category)
+            - item       (itemid PK, FK to product, FK to supplier)
+            - inventory  (itemid PK, with version column for JPA optimistic locking)
+
+        Intra-service foreign keys (product→category, item→product, item→supplier)
+        are preserved as database-level constraints. Cross-service foreign keys
+        (e.g. lineitem.itemid→item.itemid from the Order context) are deliberately
+        NOT created here — they are enforced at the application layer via REST APIs.
+
+        Include paths are relative to the classpath root, NOT relative to this file.
+    -->
+
+    <!-- Initial schema: creates all 5 Catalog-owned tables, indexes, and constraints -->
+    <include file="db/changelog/001-initial-schema.xml"/>
+
+    <!-- Add future changelogs below in sequential order (e.g. 002-add-xxx.xml) -->
+
+</databaseChangeLog>

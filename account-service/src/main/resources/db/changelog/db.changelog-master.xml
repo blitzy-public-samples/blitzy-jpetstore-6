@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- ===================================================================== -->
+    <!-- Liquibase Master Changelog — Account Service                          -->
+    <!-- ===================================================================== -->
+    <!-- This is the single entry point referenced by the Spring Boot config   -->
+    <!-- property spring.liquibase.change-log in application.yml.              -->
+    <!--                                                                       -->
+    <!-- Hibernate ddl-auto is set to 'validate' — all schema changes are      -->
+    <!-- managed exclusively through Liquibase changelogs listed below.         -->
+    <!--                                                                       -->
+    <!-- Owned tables: account, profile, signon, bannerdata                    -->
+    <!-- Target database: PostgreSQL (jpetstore_account)                       -->
+    <!-- ===================================================================== -->
+
+    <!-- Initial schema: creates the 4 Account/User Management bounded context -->
+    <!-- tables (signon, account, profile, bannerdata) in PostgreSQL.          -->
+    <include file="db/changelog/001-initial-schema.xml"/>
+
+    <!-- Seed data: migrates default users (j2ee, ACID), their profiles, and  -->
+    <!-- banner data from the monolith's HSQLDB dataload into PostgreSQL.      -->
+    <!-- Ensures cross-service referential integrity (AAP §0.8.1): all        -->
+    <!-- userids referenced in Order Service's orders table exist here.        -->
+    <include file="db/changelog/002-seed-data.xml"/>
+
+    <!-- Security hardening: widen signon.password column from varchar(25)    -->
+    <!-- to varchar(72) to accommodate BCrypt password hashes (60 chars).     -->
+    <!-- Must run after seed data so existing rows are preserved.             -->
+    <include file="db/changelog/003-widen-signon-password.xml"/>
+
+    <!-- BCrypt migration: convert existing plaintext seed passwords to       -->
+    <!-- BCrypt hashes. Must run after 003 (column widened to fit hashes).    -->
+    <include file="db/changelog/004-hash-seed-passwords.xml"/>
+
+</databaseChangeLog>

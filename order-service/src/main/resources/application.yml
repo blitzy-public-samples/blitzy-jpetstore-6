@@ -1,0 +1,287 @@
+# =============================================================================
+# JPetStore Order Service — Spring Boot 3 Application Configuration
+# =============================================================================
+#
+# Configuration for the Order/Cart bounded context microservice. This service
+# owns the orders, orderstatus, and lineitem tables, manages externalized
+# cart state via Redis, and orchestrates distributed order transactions using
+# the Saga pattern with compensating actions.
+#
+# Replaces the monolith's XML-based applicationContext.xml which configured:
+#   - Embedded HSQLDB datasource (runs schema.sql + dataload.sql)
+#   - DataSourceTransactionManager for JDBC local transactions
+#   - MyBatis SqlSessionFactoryBean with typeAliasesPackage
+#   - Component scanning of org.mybatis.jpetstore.service
+#   - MyBatis mapper scanning of org.mybatis.jpetstore.mapper
+#
+# This configuration uses Spring Boot 3 auto-configuration with:
+#   - Spring Data JPA + Hibernate (replaces MyBatis)
+#   - PostgreSQL (replaces HSQLDB)
+#   - Liquibase (schema management via changelogs)
+#   - Redis (externalized cart state, replacing session-scoped Cart)
+#   - REST client URLs (inter-service communication)
+#   - Actuator (health checks, metrics, readiness probes)
+#
+# Environment variable overrides (e.g., from docker-compose.yml) take
+# precedence over values defined here.
+#
+# Service port: 8083
+# Owned tables: orders, orderstatus, lineitem
+# PostgreSQL sequence: order_id_seq (replaces monolith's sequence table)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Server Configuration
+# -----------------------------------------------------------------------------
+# Port 8083 is the designated port for the Order Service per the API Gateway
+# routing table (AAP Section 0.4.1 and 0.7.6):
+#   - Cart.action routes to http://order-service:8083
+#   - Order.action routes to http://order-service:8083
+# This must match:
+#   - docker-compose.yml order-service port mapping
+#   - API Gateway route configuration
+#   - Other services' REST client base URLs
+# -----------------------------------------------------------------------------
+server:
+  port: 8083
+  shutdown: graceful
+
+# -----------------------------------------------------------------------------
+# Spring Configuration
+# -----------------------------------------------------------------------------
+spring:
+  application:
+    name: order-service
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Datasource Configuration (Database-per-Service Pattern)
+  # ---------------------------------------------------------------------------
+  # CRITICAL: HSQLDB is PROHIBITED as primary datasource in new services
+  # (AAP Section 0.8.1). All new services must use PostgreSQL exclusively.
+  #
+  # Each microservice owns its exclusive PostgreSQL database. No service
+  # queries another service's database directly. Cross-service data is
+  # accessed exclusively via REST APIs (e.g., inventory decrement calls
+  # Catalog Service, account verification calls Account Service).
+  #
+  # The database jpetstore_order owns the orders, orderstatus, and lineitem
+  # tables from the original monolith schema. Cross-service foreign keys
+  # (e.g., orders.userid -> account.userid, lineitem.itemid -> item.itemid)
+  # are removed as database constraints and enforced at the application layer.
+  #
+  # The monolith's sequence table is replaced by PostgreSQL native sequence
+  # order_id_seq, eliminating the non-thread-safe read-then-update pattern
+  # in the original OrderService.getNextId().
+  #
+  # postgres-order is the Docker Compose service hostname for the Order
+  # Service's dedicated PostgreSQL instance.
+  # ---------------------------------------------------------------------------
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://postgres-order:5432/jpetstore_order}
+    username: ${DB_USERNAME:order_user}
+    password: ${DB_PASSWORD:order_pass}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+      idle-timeout: 300000
+      connection-timeout: 20000
+      max-lifetime: 1200000
+      pool-name: OrderServiceHikariPool
+
+  # ---------------------------------------------------------------------------
+  # JPA / Hibernate Configuration
+  # ---------------------------------------------------------------------------
+  # Spring Data JPA with Hibernate replaces the monolith's MyBatis ORM.
+  # The monolith used SqlSessionFactoryBean with type aliases for the
+  # org.mybatis.jpetstore.domain package and mapper scanning of
+  # org.mybatis.jpetstore.mapper. Here, JPA entities in com.jpetstore.order
+  # are auto-discovered by Spring Boot's entity scanning.
+  #
+  # CRITICAL: ddl-auto is set to 'validate' — Liquibase is the sole schema
+  # authority. Hibernate validates the schema matches entity mappings but
+  # does NOT create, update, or drop any tables.
+  # ---------------------------------------------------------------------------
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        jdbc:
+          batch_size: 25
+          time_zone: UTC
+        order_inserts: true
+        order_updates: true
+
+  # ---------------------------------------------------------------------------
+  # Liquibase Configuration — Schema Management
+  # ---------------------------------------------------------------------------
+  # Liquibase manages the Order Service's PostgreSQL schema via XML changelogs.
+  # The master changelog references versioned changeset files that define the
+  # orders, orderstatus, and lineitem tables along with the order_id_seq
+  # PostgreSQL sequence (replacing the monolith's non-thread-safe sequence
+  # table pattern).
+  #
+  # Cross-service foreign keys (lineitem.itemid -> item.itemid from the
+  # monolith schema) are deliberately NOT created — they are enforced at the
+  # application layer via REST API calls to Catalog Service.
+  # ---------------------------------------------------------------------------
+  liquibase:
+    enabled: true
+    change-log: classpath:db/changelog/db.changelog-master.xml
+
+  # ---------------------------------------------------------------------------
+  # Redis Configuration — Externalized Cart State
+  # ---------------------------------------------------------------------------
+  # Redis replaces the monolith's HTTP session-scoped Cart object stored in
+  # CartActionBean. Cart state is externalized to Redis, enabling stateless
+  # services and horizontal scalability.
+  #
+  # The cart is keyed by:
+  #   - Session cookie (for anonymous/unauthenticated users)
+  #   - Username (for authenticated users)
+  # On login, the anonymous cart is merged into the user's persistent cart,
+  # preserving the existing behavior that unauthenticated users can browse
+  # and build a cart before signing in.
+  #
+  # Used by CartStateService and CartStateRepository in order-service.
+  # Also supports Saga state caching during distributed order transactions.
+  # ---------------------------------------------------------------------------
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:redis}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+      timeout: 5000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 2
+          max-wait: 2000ms
+
+# -----------------------------------------------------------------------------
+# JWT Configuration (Service-to-Service Authentication)
+# -----------------------------------------------------------------------------
+# The Order Service generates a service-account JWT to authenticate itself
+# when calling the Account Service (GET /api/accounts/{username}). The token
+# is signed with the same shared secret used by Account Service and API
+# Gateway, ensuring cross-service JWT validation works seamlessly.
+#
+# The generated token uses subject "order-service" to identify the caller
+# as an internal service rather than a user session.
+# -----------------------------------------------------------------------------
+jwt:
+  secret: ${JWT_SECRET:jpetstore-jwt-secret-key-for-development-only-change-in-production}
+  expiration-ms: 3600000
+  issuer: jpetstore
+
+# -----------------------------------------------------------------------------
+# Inter-Service REST Client URLs
+# -----------------------------------------------------------------------------
+# The Order Service communicates with two other services via synchronous REST:
+#
+# Account Service (http://account-service:8081):
+#   - GET /api/accounts/{username} — verify account exists during order
+#     placement (used by AccountServiceClient.java)
+#
+# Catalog Service (http://catalog-service:8082):
+#   - GET /api/items/{id} — retrieve item details for order line items
+#   - POST /api/items/{id}/inventory/decrement — reserve/decrement inventory
+#     during Saga step 2 (used by CatalogServiceClient.java)
+#   - POST /api/items/{id}/inventory/restore — compensating action for
+#     inventory restoration on order failure
+#
+# These URLs use Docker Compose service hostnames. Override with environment
+# variables for non-Docker deployments:
+#   SERVICES_ACCOUNT_SERVICE_URL=http://localhost:8081
+#   SERVICES_CATALOG_SERVICE_URL=http://localhost:8082
+# -----------------------------------------------------------------------------
+services:
+  account-service:
+    url: ${ACCOUNT_SERVICE_URL:http://account-service:8081}
+  catalog-service:
+    url: ${CATALOG_SERVICE_URL:http://catalog-service:8082}
+
+# -----------------------------------------------------------------------------
+# Actuator / Management Configuration
+# -----------------------------------------------------------------------------
+# Exposes health, info, and metrics endpoints for container orchestration,
+# Docker healthchecks, API Gateway readiness probes, and operational
+# monitoring (AAP Section 0.4.1).
+#
+# Health endpoint includes database and Redis connectivity indicators.
+# Metrics endpoint provides JVM, HTTP, and datasource pool metrics.
+# -----------------------------------------------------------------------------
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+    metrics:
+      enabled: false
+  health:
+    db:
+      enabled: true
+    redis:
+      enabled: true
+
+# -----------------------------------------------------------------------------
+# Logging Configuration
+# -----------------------------------------------------------------------------
+# Production-appropriate log levels. The order service package logs at INFO
+# level for business operation visibility (order placement, Saga steps, cart
+# operations). Spring framework and Hibernate internals are set to WARN to
+# reduce noise while still capturing connection issues or deprecation warnings.
+# Liquibase logs at INFO during startup to track schema migrations.
+# -----------------------------------------------------------------------------
+logging:
+  level:
+    com.jpetstore.order: INFO
+    org.springframework: WARN
+    org.hibernate.SQL: WARN
+    org.hibernate.type.descriptor.sql.BasicBinder: WARN
+    org.liquibase: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+# -----------------------------------------------------------------------------
+# Dual-Write Configuration (Coexistence Window)
+# -----------------------------------------------------------------------------
+# During the Strangler Fig coexistence window, every write to PostgreSQL
+# is asynchronously replicated to the monolith's HSQLDB to enable safe
+# rollback at any point before dual-write is disabled.
+#
+# Write propagation direction: PostgreSQL (primary) -> HSQLDB (secondary).
+# Conflict detection uses last_modified_timestamp comparison — if HSQLDB
+# has a newer timestamp, the replicator logs a conflict alert and does NOT
+# overwrite.
+#
+# Configuration for the DualWriteConfig class:
+#   - enabled: false by default; set to true when coexistence begins
+#   - hsqldb.url: HSQLDB connection used ONLY for dual-write replication
+#     (this is the ONLY reference to HSQLDB in this service)
+#   - max-lag-seconds: maximum acceptable replication lag (5s per AAP 0.7.5)
+#
+# Dual-write is disabled only after a 48-hour observation window passes
+# with no incidents — this is the point of no return for that service.
+#
+# To enable: set dualwrite.enabled=true via environment variable or config
+# change (no redeployment required if using Spring Cloud Config or env vars).
+# To disable after observation: set dualwrite.enabled=false.
+# -----------------------------------------------------------------------------
+dualwrite:
+  enabled: false
+  hsqldb:
+    url: jdbc:hsqldb:hsql://localhost:9001/jpetstore
+    username: SA
+    password: ""
+  max-lag-seconds: 5

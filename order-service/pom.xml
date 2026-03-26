@@ -1,0 +1,294 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+       Copyright 2010-2026 the original author or authors.
+
+       Licensed under the Apache License, Version 2.0 (the "License");
+       you may not use this file except in compliance with the License.
+       You may obtain a copy of the License at
+
+          https://www.apache.org/licenses/LICENSE-2.0
+
+       Unless required by applicable law or agreed to in writing, software
+       distributed under the License is distributed on an "AS IS" BASIS,
+       WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+       See the License for the specific language governing permissions and
+       limitations under the License.
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+  <modelVersion>4.0.0</modelVersion>
+
+  <!--
+    Parent: jpetstore-parent (multi-module reactor parent)
+    The parent POM imports the Spring Boot 3.5.12 BOM, Spring Cloud BOM,
+    Testcontainers BOM (1.20.4), and manages common dependency versions
+    (PostgreSQL 42.7.5, Liquibase, etc.).
+    All Spring Boot starter dependencies are BOM-managed — no version tags needed.
+  -->
+  <parent>
+    <groupId>org.mybatis</groupId>
+    <artifactId>jpetstore-parent</artifactId>
+    <version>6.2.1-SNAPSHOT</version>
+    <relativePath>../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>order-service</artifactId>
+  <packaging>jar</packaging>
+
+  <name>JPetStore Order Service</name>
+  <description>Order/Cart bounded context microservice for JPetStore — manages orders, order status,
+    line items, and externalized cart state via Saga orchestration pattern, backed by Spring Data JPA,
+    PostgreSQL, and Redis for cart state externalization. Communicates with Account Service and
+    Catalog Service via REST for user verification and inventory reservation.</description>
+
+  <properties>
+    <java.version>17</java.version>
+  </properties>
+
+  <dependencies>
+
+    <!-- ========================================== -->
+    <!-- Spring Boot Starters (BOM-managed versions) -->
+    <!-- ========================================== -->
+
+    <!-- REST API endpoints + embedded Tomcat for OrderController, CartController -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+
+    <!-- Spring Data JPA + Hibernate for Order, OrderStatus, LineItem, CartState entities
+         Replaces MyBatis mappers (OrderMapper, LineItemMapper, SequenceMapper) from the monolith -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+
+    <!-- Spring Data Redis for externalized cart state (CartStateService, CartStateRepository)
+         Replaces HTTP session-scoped Cart object from CartActionBean in the monolith.
+         Also used for Saga state caching during distributed order transactions. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-redis</artifactId>
+    </dependency>
+
+    <!-- Jakarta Bean Validation for request DTOs (OrderRequest, CartDTO, CartItemDTO) -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+
+    <!-- Health checks, metrics, and readiness probes for container orchestration -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+
+    <!-- Spring Security for defense-in-depth security headers (X-Content-Type-Options,
+         X-Frame-Options, Cache-Control, etc.) and endpoint security configuration.
+         Cart operations permit anonymous access; order operations will require authentication
+         when full JWT integration is enabled. Matches the security posture of
+         Account Service and Catalog Service. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-security</artifactId>
+    </dependency>
+
+    <!-- ======== -->
+    <!-- Database -->
+    <!-- ======== -->
+
+    <!-- PostgreSQL JDBC driver — per-service database (jpetstore_order)
+         Replaces monolith's shared HSQLDB. Tables: orders, orderstatus, lineitem.
+         Uses PostgreSQL native sequences instead of the monolith's sequence table. -->
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+
+    <!-- Liquibase for database schema management via XML changelogs
+         Manages orders, orderstatus, lineitem tables and order_id_seq sequence -->
+    <dependency>
+      <groupId>org.liquibase</groupId>
+      <artifactId>liquibase-core</artifactId>
+    </dependency>
+
+    <!-- ========================== -->
+    <!-- JWT (Service-to-Service)  -->
+    <!-- ========================== -->
+
+    <!-- JJWT 0.12.6 — JWT generation for service-to-service authentication.
+         The Order Service generates a short-lived service-account JWT signed with
+         the shared secret (same JWT_SECRET used by Account Service and API Gateway)
+         and injects it as a default Authorization header on outbound REST calls to
+         the Account Service. This is required because Account Service's SecurityConfig
+         enforces authentication on GET /api/accounts/{username}.
+         The JJWT version is managed by the parent POM (jjwt.version=0.12.6). -->
+    <dependency>
+      <groupId>io.jsonwebtoken</groupId>
+      <artifactId>jjwt-api</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.jsonwebtoken</groupId>
+      <artifactId>jjwt-impl</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.jsonwebtoken</groupId>
+      <artifactId>jjwt-jackson</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+
+    <!-- ======= -->
+    <!-- Testing -->
+    <!-- ======= -->
+
+    <!-- JUnit 5, Mockito, AssertJ, Spring Test support -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- Spring Security test support for @WithMockUser, SecurityMockMvcRequestPostProcessors -->
+    <dependency>
+      <groupId>org.springframework.security</groupId>
+      <artifactId>spring-security-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- HSQLDB for dual-write replication testing (DualWriteConfig tests) -->
+    <dependency>
+      <groupId>org.hsqldb</groupId>
+      <artifactId>hsqldb</artifactId>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- Testcontainers PostgreSQL for integration tests against real database -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- Testcontainers JUnit 5 integration for lifecycle management -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- WireMock standalone for HTTP service simulation in integration tests.
+         Used by OrderSagaIT to simulate Catalog Service and Account Service
+         responses during distributed transaction failure scenarios (AAP §0.7.1). -->
+    <dependency>
+      <groupId>org.wiremock</groupId>
+      <artifactId>wiremock-standalone</artifactId>
+      <version>3.3.1</version>
+      <scope>test</scope>
+    </dependency>
+
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!-- Surefire — unit tests only; exclude *IT integration tests (run by failsafe) -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <excludes>
+            <exclude>**/*IT.java</exclude>
+          </excludes>
+          <excludedGroups>integration</excludedGroups>
+        </configuration>
+      </plugin>
+      <!-- Failsafe — integration tests (*IT.java) with @Tag("integration") during verify phase.
+           Runs OrderSagaIT (12 WireMock-based cross-service tests), CartStateServiceIT (24 Redis-backed
+           cart tests), and repository ITs against Testcontainers PostgreSQL. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+        <version>3.5.5</version>
+        <configuration>
+          <includes>
+            <include>**/*IT.java</include>
+          </includes>
+          <groups>integration</groups>
+        </configuration>
+        <executions>
+          <execution>
+            <goals>
+              <goal>integration-test</goal>
+              <goal>verify</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- JaCoCo — code coverage measurement with minimum 80% instruction coverage enforcement
+           per AAP requirement: "New service code must achieve > 80% test coverage" -->
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>prepare-agent</id>
+            <goals>
+              <goal>prepare-agent</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>report</id>
+            <phase>test</phase>
+            <goals>
+              <goal>report</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>check</id>
+            <goals>
+              <goal>check</goal>
+            </goals>
+            <configuration>
+              <rules>
+                <rule>
+                  <element>BUNDLE</element>
+                  <limits>
+                    <limit>
+                      <counter>INSTRUCTION</counter>
+                      <value>COVEREDRATIO</value>
+                      <minimum>0.80</minimum>
+                    </limit>
+                  </limits>
+                </rule>
+              </rules>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- Spring Boot Maven Plugin — builds executable JAR with embedded Tomcat
+           Inherited plugin version from parent's pluginManagement (3.5.12) -->
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+            <configuration>
+              <!-- Preserve the original thin JAR for failsafe classpath; fat JAR gets -exec suffix -->
+              <classifier>exec</classifier>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+
+</project>

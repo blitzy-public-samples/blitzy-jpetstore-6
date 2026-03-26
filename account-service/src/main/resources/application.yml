@@ -1,0 +1,157 @@
+# =============================================================================
+# Account Service — Spring Boot 3 Configuration
+# =============================================================================
+# Replaces the monolith's XML-based applicationContext.xml (embedded HSQLDB,
+# DataSourceTransactionManager, MyBatis SqlSessionFactory, component scanning)
+# with Spring Boot 3 auto-configuration targeting PostgreSQL, Spring Data JPA,
+# Liquibase schema management, JWT authentication, and Actuator endpoints.
+#
+# Owned tables: account, profile, signon, bannerdata
+# Service port: 8081
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Server Configuration
+# -----------------------------------------------------------------------------
+server:
+  port: 8081
+
+spring:
+  application:
+    name: account-service
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Datasource Configuration
+  # ---------------------------------------------------------------------------
+  # CRITICAL: HSQLDB is PROHIBITED as primary datasource in new services.
+  # All new services must use PostgreSQL exclusively (AAP Section 0.8.1).
+  # The database jpetstore_account owns the account, profile, signon, and
+  # bannerdata tables from the original monolith schema.
+  # ---------------------------------------------------------------------------
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://postgres-account:5432/jpetstore_account}
+    username: ${DB_USERNAME:account_user}
+    password: ${DB_PASSWORD:account_pass}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+      idle-timeout: 300000
+      connection-timeout: 20000
+      max-lifetime: 1200000
+
+  # ---------------------------------------------------------------------------
+  # JPA / Hibernate Configuration
+  # ---------------------------------------------------------------------------
+  # Liquibase is the schema authority — Hibernate ONLY validates the schema.
+  # Do NOT use create, create-drop, or update for ddl-auto.
+  # open-in-view is disabled as a best practice for microservices to prevent
+  # lazy-loading issues and unintended database queries in the view layer.
+  # ---------------------------------------------------------------------------
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        jdbc:
+          time_zone: UTC
+    show-sql: false
+    open-in-view: false
+
+  # ---------------------------------------------------------------------------
+  # Redis Configuration
+  # ---------------------------------------------------------------------------
+  # Redis is used for storing per-user password-change timestamps to enable
+  # JWT token revocation after password changes. When a password is updated,
+  # a timestamp is written to Redis; the API Gateway checks this timestamp
+  # on every request and rejects tokens issued before the password change.
+  # ---------------------------------------------------------------------------
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:redis}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+
+  # ---------------------------------------------------------------------------
+  # Liquibase Configuration
+  # ---------------------------------------------------------------------------
+  # Liquibase manages the database schema via changelogs. The master changelog
+  # references 001-initial-schema.xml which defines the account, profile,
+  # signon, and bannerdata tables with PostgreSQL-compatible column types
+  # and snake_case naming conventions.
+  # ---------------------------------------------------------------------------
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.xml
+    enabled: true
+
+# -----------------------------------------------------------------------------
+# JWT Configuration
+# -----------------------------------------------------------------------------
+# Account Service issues JWT tokens for stateless authentication, replacing
+# the monolith's session-scoped AccountActionBean.authenticated flag.
+# The JWT token contains username and accountId claims and is validated by
+# the API Gateway on every request.
+#
+# NOTE: The secret is a placeholder value. Secrets management is explicitly
+# out of scope for this POC (AAP Section 0.3.2). In production, this should
+# be externalized via environment variables or a secrets vault.
+# -----------------------------------------------------------------------------
+jwt:
+  secret: ${JWT_SECRET:jpetstore-jwt-secret-key-for-development-only-change-in-production}
+  expiration-ms: 3600000
+  issuer: jpetstore
+
+# -----------------------------------------------------------------------------
+# Actuator / Management Configuration
+# -----------------------------------------------------------------------------
+# Exposes health, info, and metrics endpoints for operational monitoring,
+# health checks, and readiness probes as required by the microservices
+# infrastructure (AAP Section 0.4.1).
+# -----------------------------------------------------------------------------
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+    metrics:
+      enabled: false
+
+# -----------------------------------------------------------------------------
+# Logging Configuration
+# -----------------------------------------------------------------------------
+# Application-level logging at INFO, with reduced verbosity for framework
+# internals (Spring Security and Hibernate SQL) to keep log output focused
+# on business-relevant events during normal operation.
+# -----------------------------------------------------------------------------
+logging:
+  level:
+    com.jpetstore.account: INFO
+    org.springframework.security: WARN
+    org.hibernate.SQL: WARN
+
+# -----------------------------------------------------------------------------
+# Dual-Write Configuration (Coexistence Window)
+# -----------------------------------------------------------------------------
+# During the Strangler Fig coexistence window, every write to PostgreSQL
+# is asynchronously replicated to the monolith's HSQLDB to enable safe
+# rollback at any point before dual-write is disabled.
+#
+# Configuration for the DualWriteConfig class:
+# - enabled: false by default; set to true when coexistence begins
+# - hsqldb.url: HSQLDB connection used ONLY for dual-write replication
+# - max-lag-seconds: maximum acceptable replication lag (AAP Section 0.7.5)
+#
+# Dual-write is disabled only after a 48-hour observation window passes
+# with no incidents — this is the point of no return for that service.
+# -----------------------------------------------------------------------------
+dualwrite:
+  enabled: false
+  hsqldb:
+    url: jdbc:hsqldb:hsql://localhost:9001/jpetstore
+    username: SA
+    password: ""
+  max-lag-seconds: 5

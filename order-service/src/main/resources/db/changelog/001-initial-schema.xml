@@ -1,0 +1,368 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Liquibase Initial Schema for Order/Cart Bounded Context (PostgreSQL).
+
+    Defines the database objects owned by the Order Service:
+      1. order_id_seq   - PostgreSQL SEQUENCE replacing the monolith's non-thread-safe
+                          HSQLDB sequence table (SELECT-then-UPDATE pattern in
+                          OrderService.getNextId() / SequenceMapper)
+      2. orders         - Order header records (25 columns from HSQLDB + 1 new 'status'
+                          column for Saga orchestration state machine)
+      3. orderstatus    - Per-line-item order status tracking
+      4. lineitem       - Order line items with quantity and unit price
+
+    Derived from the monolith's jpetstore-hsqldb-schema.sql with the following
+    transformations applied:
+
+    Column naming:
+      - ALL column names converted to snake_case for PostgreSQL conventions
+      - orders.userid retains the original HSQLDB column name for migration consistency
+
+    HSQLDB -> PostgreSQL type mappings:
+      - int            -> integer
+      - decimal(10,2)  -> numeric(10,2)
+      - date           -> timestamp with time zone (timezone-aware)
+      - varchar(N)     -> varchar(N)  (unchanged)
+
+    Cross-service foreign key removal (AAP Section 0.8.1):
+      - lineitem.item_id has NO FK to Catalog Service's item table
+        (enforced at the application layer via REST API calls)
+      - orders.userid has NO FK to Account Service's account table
+        (enforced at the application layer via REST API calls)
+
+    Sequence replacement (AAP Section 0.7.3):
+      - The HSQLDB sequence table is NOT recreated
+      - order_id_seq starts at 2000 (max migrated ordernum 1000 + 1000 buffer)
+      - Thread-safe, database-guaranteed atomic increment
+
+    New column (AAP Section 0.7.1):
+      - orders.status varchar(20) NULLABLE for Saga state machine:
+        PENDING -> CONFIRMED / FAILED
+-->
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- ======================================================================
+         Changeset 1: Create order_id_seq PostgreSQL SEQUENCE
+         Replaces: HSQLDB sequence table (schema.sql lines 160-165)
+                   + data load: INSERT INTO sequence VALUES('ordernum', 1000)
+         Used by: Order JPA entity via @GeneratedValue(strategy=SEQUENCE,
+                  generator="order_seq") / @SequenceGenerator(name="order_seq",
+                  sequenceName="order_id_seq")
+
+         Starting value: 2000
+           - Current max ordernum from jpetstore-hsqldb-dataload.sql = 1000
+           - Buffer of +1000 to guarantee no collisions with migrated order IDs
+           - Per AAP Section 0.7.3 and 0.8.3: "All PostgreSQL sequence starting
+             values must exceed the maximum migrated ID"
+
+         This replaces the non-thread-safe read-then-update pattern:
+           sequence = sequenceMapper.getSequence(new Sequence(name, -1));
+           sequenceMapper.updateSequence(new Sequence(name, sequence.getNextId() + 1));
+         with a database-guaranteed atomic increment.
+         ====================================================================== -->
+    <changeSet id="001-create-order-id-seq" author="jpetstore-migration">
+        <comment>Create PostgreSQL sequence replacing non-thread-safe HSQLDB sequence table for order ID generation</comment>
+        <createSequence sequenceName="order_id_seq"
+                        startValue="2000"
+                        incrementBy="1"/>
+        <rollback>
+            <dropSequence sequenceName="order_id_seq"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ======================================================================
+         Changeset 2: Create orders table
+         Source: jpetstore-hsqldb-schema.sql lines 67-94
+         Columns: 26 total (25 from HSQLDB mapped to snake_case + 1 new 'status')
+
+         Column mapping (HSQLDB -> PostgreSQL):
+           orderid          -> order_id          (PK, default from order_id_seq)
+           userid           -> userid             (retains original HSQLDB name for migration consistency)
+           orderdate        -> order_date         (date -> timestamp with time zone)
+           shipaddr1        -> ship_addr1
+           shipaddr2        -> ship_addr2
+           shipcity         -> ship_city
+           shipstate        -> ship_state
+           shipzip          -> ship_zip
+           shipcountry      -> ship_country
+           billaddr1        -> bill_addr1
+           billaddr2        -> bill_addr2
+           billcity         -> bill_city
+           billstate        -> bill_state
+           billzip          -> bill_zip
+           billcountry      -> bill_country
+           courier          -> courier            (already snake_case)
+           totalprice       -> total_price        (decimal -> numeric)
+           billtofirstname  -> bill_to_first_name
+           billtolastname   -> bill_to_last_name
+           shiptofirstname  -> ship_to_first_name
+           shiptolastname   -> ship_to_last_name
+           creditcard       -> credit_card
+           exprdate         -> expr_date
+           cardtype         -> card_type
+           locale           -> locale             (already snake_case)
+           (NEW)            -> status             (Saga state: PENDING/CONFIRMED/FAILED)
+
+         Cross-service FK removal:
+           - orders.userid: NO FK to Account Service's account table
+             (was orders.userid -> account.userid in the monolith)
+         ====================================================================== -->
+    <changeSet id="001-create-orders" author="jpetstore-migration">
+        <comment>Create orders table for Order/Cart bounded context</comment>
+        <createTable tableName="orders">
+            <!-- Primary key with default value from order_id_seq sequence -->
+            <column name="order_id" type="integer" defaultValueSequenceNext="order_id_seq">
+                <constraints primaryKey="true" primaryKeyName="pk_orders" nullable="false"/>
+            </column>
+
+            <!-- Retains original HSQLDB column name 'userid' for migration consistency.
+                 NO FK to Account Service (cross-service FK removed per AAP 0.8.1) -->
+            <column name="userid" type="varchar(80)">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Type changed: HSQLDB date -> PostgreSQL timestamp with time zone -->
+            <column name="order_date" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Shipping address fields -->
+            <column name="ship_addr1" type="varchar(80)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="ship_addr2" type="varchar(80)"/>
+            <column name="ship_city" type="varchar(80)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="ship_state" type="varchar(80)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="ship_zip" type="varchar(20)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="ship_country" type="varchar(20)">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Billing address fields -->
+            <column name="bill_addr1" type="varchar(80)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="bill_addr2" type="varchar(80)"/>
+            <column name="bill_city" type="varchar(80)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="bill_state" type="varchar(80)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="bill_zip" type="varchar(20)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="bill_country" type="varchar(20)">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Shipping courier -->
+            <column name="courier" type="varchar(80)">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Type changed: HSQLDB decimal(10,2) -> PostgreSQL numeric(10,2) -->
+            <column name="total_price" type="numeric(10,2)">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Bill-to name fields -->
+            <column name="bill_to_first_name" type="varchar(80)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="bill_to_last_name" type="varchar(80)">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Ship-to name fields -->
+            <column name="ship_to_first_name" type="varchar(80)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="ship_to_last_name" type="varchar(80)">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Payment fields -->
+            <column name="credit_card" type="varchar(80)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="expr_date" type="varchar(7)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="card_type" type="varchar(80)">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Locale -->
+            <column name="locale" type="varchar(80)">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- NEW column for Saga orchestration state machine (AAP Section 0.7.1).
+                 Not in original HSQLDB schema. NULLABLE for backward compatibility
+                 during data migration.
+                 Values: PENDING, CONFIRMED, FAILED -->
+            <column name="status" type="varchar(20)"/>
+        </createTable>
+        <rollback>
+            <dropTable tableName="orders"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ======================================================================
+         Changeset 3: Create orderstatus table
+         Source: jpetstore-hsqldb-schema.sql lines 96-102
+         Columns: 4 (order_id, line_num, timestamp, status)
+         PK: composite on (order_id, line_num)
+
+         Column mapping (HSQLDB -> PostgreSQL):
+           orderid   -> order_id   (int -> integer)
+           linenum   -> line_num   (int -> integer)
+           timestamp -> timestamp  (date -> timestamp with time zone)
+           status    -> status     (varchar(2) -> varchar(20), widened for Saga state values)
+
+         Note: The original HSQLDB schema does NOT define a FK from
+         orderstatus.orderid to orders.orderid. We stay faithful to the
+         source schema and do not add intra-service FKs that were not
+         originally present.
+         ====================================================================== -->
+    <changeSet id="001-create-orderstatus" author="jpetstore-migration">
+        <comment>Create orderstatus table for order line status tracking</comment>
+        <createTable tableName="orderstatus">
+            <column name="order_id" type="integer">
+                <constraints nullable="false"/>
+            </column>
+            <column name="line_num" type="integer">
+                <constraints nullable="false"/>
+            </column>
+            <!-- Type changed: HSQLDB date -> PostgreSQL timestamp with time zone -->
+            <column name="timestamp" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+            <column name="status" type="varchar(20)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addPrimaryKey tableName="orderstatus"
+                       columnNames="order_id, line_num"
+                       constraintName="pk_orderstatus"/>
+        <rollback>
+            <dropTable tableName="orderstatus"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ======================================================================
+         Changeset 4: Create lineitem table
+         Source: jpetstore-hsqldb-schema.sql lines 104-111
+         Columns: 5 (order_id, line_num, item_id, quantity, unit_price)
+         PK: composite on (order_id, line_num)
+
+         Column mapping (HSQLDB -> PostgreSQL):
+           orderid   -> order_id   (int -> integer)
+           linenum   -> line_num   (int -> integer)
+           itemid    -> item_id    (varchar(10), unchanged type)
+           quantity  -> quantity   (int -> integer, already snake_case)
+           unitprice -> unit_price (decimal(10,2) -> numeric(10,2))
+
+         Cross-service FK removal (AAP Section 0.8.1):
+           - item_id: NO FK to Catalog Service's item table
+             (was lineitem.itemid -> item.itemid in the monolith)
+             Referential integrity enforced at the application layer via
+             REST API calls to Catalog Service.
+         ====================================================================== -->
+    <changeSet id="001-create-lineitem" author="jpetstore-migration">
+        <comment>Create lineitem table for order line items</comment>
+        <createTable tableName="lineitem">
+            <column name="order_id" type="integer">
+                <constraints nullable="false"/>
+            </column>
+            <column name="line_num" type="integer">
+                <constraints nullable="false"/>
+            </column>
+            <!-- NO FK to Catalog Service's item table — cross-service FK removed.
+                 Stored as a plain string field; referential integrity enforced
+                 at the application layer via REST API calls. -->
+            <column name="item_id" type="varchar(10)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="quantity" type="integer">
+                <constraints nullable="false"/>
+            </column>
+            <!-- Type changed: HSQLDB decimal(10,2) -> PostgreSQL numeric(10,2) -->
+            <column name="unit_price" type="numeric(10,2)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addPrimaryKey tableName="lineitem"
+                       columnNames="order_id, line_num"
+                       constraintName="pk_lineitem"/>
+        <rollback>
+            <dropTable tableName="lineitem"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ======================================================================
+         Changeset 5: Create order_saga_state table
+         Source: NEW — not present in the monolith HSQLDB schema.
+         Purpose: Persists Saga orchestration state for distributed order
+                  transactions (AAP Section 0.7.1). Enables crash recovery,
+                  compensation tracking, and reconciliation of stalled Sagas.
+
+         Columns:
+           saga_id      varchar(36)  PK   — UUID v4 identifier for the Saga instance
+           order_id     integer      NN   — references orders.order_id (same DB, no FK)
+           current_step varchar(30)  NN   — enum: CREATE_ORDER, RESERVE_INVENTORY, CONFIRM_ORDER
+           status       varchar(20)  NN   — PENDING / INVENTORY_RESERVED / COMPLETED / COMPENSATING / FAILED
+           created_at   timestamp    NN   — Saga creation time (immutable after insert)
+           updated_at   timestamp    NN   — last state transition time (updated on every merge)
+         ====================================================================== -->
+    <changeSet id="001-create-order-saga-state" author="jpetstore-migration">
+        <comment>Create order_saga_state table for Saga orchestration crash recovery and compensation tracking</comment>
+        <createTable tableName="order_saga_state">
+            <!-- Primary key: UUID v4 stored as 36-char String -->
+            <column name="saga_id" type="varchar(36)">
+                <constraints primaryKey="true" primaryKeyName="pk_order_saga_state" nullable="false"/>
+            </column>
+
+            <!-- References orders.order_id within the same database.
+                 Not a formal FK — the Saga state is a separate concern from the order entity. -->
+            <column name="order_id" type="integer">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Current Saga step as enum name (String): CREATE_ORDER, RESERVE_INVENTORY, CONFIRM_ORDER -->
+            <column name="current_step" type="varchar(30)">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Saga status: PENDING, INVENTORY_RESERVED, COMPLETED, COMPENSATING, FAILED -->
+            <column name="status" type="varchar(20)">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Saga creation timestamp — immutable after insert -->
+            <column name="created_at" type="timestamp">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Last state transition timestamp — updated on every state change -->
+            <column name="updated_at" type="timestamp">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <rollback>
+            <dropTable tableName="order_saga_state"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

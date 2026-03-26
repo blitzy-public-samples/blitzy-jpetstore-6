@@ -1,0 +1,410 @@
+#
+#    Copyright 2010-2026 the original author or authors.
+#
+#    Licensed under the Apache License, Version 2.0 (the "License");
+#    you may not use this file except in compliance with the License.
+#    You may obtain a copy of the License at
+#
+#       https://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS,
+#    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#    See the License for the specific language governing permissions and
+#    limitations under the License.
+#
+
+# =============================================================================
+# JPetStore 6 — Full Microservices Stack Docker Compose Configuration
+# =============================================================================
+#
+# This Compose file defines the complete microservices infrastructure for the
+# decomposed JPetStore application, implementing the Strangler Fig pattern with
+# an API Gateway progressively routing traffic from the preserved monolith to
+# the new Spring Boot 3 microservices.
+#
+# Services (9 total):
+#   Infrastructure:
+#     - postgres-account   : PostgreSQL 16 for Account Service (port 5432)
+#     - postgres-catalog   : PostgreSQL 16 for Catalog Service (port 5433)
+#     - postgres-order     : PostgreSQL 16 for Order Service   (port 5434)
+#     - redis              : Redis 7 for routing flags, cart state, session (port 6379)
+#   Application:
+#     - monolith           : Original JPetStore WAR (Stripes/MyBatis) (port 8090)
+#     - account-service    : Account/User Management microservice   (port 8081)
+#     - catalog-service    : Catalog/Inventory microservice         (port 8082)
+#     - order-service      : Order/Cart microservice                (port 8083)
+#     - api-gateway        : Spring Cloud Gateway entry point       (port 8080)
+#
+# Network: All services communicate over the jpetstore-network bridge network.
+# Volumes: Named volumes persist PostgreSQL data across container restarts.
+#
+# Port Mapping Summary:
+#   8080 -> API Gateway (single public entry point)
+#   8081 -> Account Service
+#   8082 -> Catalog Service
+#   8083 -> Order Service
+#   8090 -> Monolith (direct access, bypassing gateway)
+#   5432 -> PostgreSQL Account DB
+#   5433 -> PostgreSQL Catalog DB
+#   5434 -> PostgreSQL Order DB
+#   6379 -> Redis
+# =============================================================================
+
+version: "3.9"
+
+# =============================================================================
+# Services
+# =============================================================================
+services:
+
+  # ---------------------------------------------------------------------------
+  # Infrastructure: PostgreSQL Databases (Database-per-Service Pattern)
+  # ---------------------------------------------------------------------------
+
+  # PostgreSQL instance for Account Service — owns account, profile, signon,
+  # and bannerdata tables.
+  postgres-account:
+    image: postgres:16
+    container_name: postgres-account
+    environment:
+      POSTGRES_DB: ${ACCOUNT_DB_NAME:-jpetstore_account}
+      POSTGRES_USER: ${ACCOUNT_DB_USER:-account_user}
+      POSTGRES_PASSWORD: ${ACCOUNT_DB_PASSWORD:-account_pass}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-account-data:/var/lib/postgresql/data
+    networks:
+      - jpetstore-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U account_user -d jpetstore_account"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # PostgreSQL instance for Catalog Service — owns category, product, item,
+  # inventory, and supplier tables.
+  postgres-catalog:
+    image: postgres:16
+    container_name: postgres-catalog
+    environment:
+      POSTGRES_DB: ${CATALOG_DB_NAME:-jpetstore_catalog}
+      POSTGRES_USER: ${CATALOG_DB_USER:-catalog_user}
+      POSTGRES_PASSWORD: ${CATALOG_DB_PASSWORD:-catalog_pass}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-catalog-data:/var/lib/postgresql/data
+    networks:
+      - jpetstore-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U catalog_user -d jpetstore_catalog"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # PostgreSQL instance for Order Service — owns orders, orderstatus, lineitem
+  # tables plus PostgreSQL sequences replacing the legacy sequence table.
+  postgres-order:
+    image: postgres:16
+    container_name: postgres-order
+    environment:
+      POSTGRES_DB: ${ORDER_DB_NAME:-jpetstore_order}
+      POSTGRES_USER: ${ORDER_DB_USER:-order_user}
+      POSTGRES_PASSWORD: ${ORDER_DB_PASSWORD:-order_pass}
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres-order-data:/var/lib/postgresql/data
+    networks:
+      - jpetstore-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U order_user -d jpetstore_order"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Infrastructure: Redis
+  # ---------------------------------------------------------------------------
+
+  # Redis instance serving three concerns:
+  #   1. Routing flags for Strangler Fig pattern (routing.flag.account-service, etc.)
+  #   2. Externalized cart state (replacing session-scoped CartActionBean)
+  #   3. Session/token management support
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - jpetstore-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Application: Preserved Monolith
+  # ---------------------------------------------------------------------------
+
+  # The original JPetStore 6 monolith (Stripes MVC + MyBatis + HSQLDB).
+  # Preserved as-is during the Strangler Fig coexistence window. ActionBeans
+  # are updated to call microservice REST APIs for already-extracted bounded
+  # contexts. Port shifted to 8090 since the API Gateway occupies port 8080.
+  monolith:
+    container_name: jpetstore-monolith
+    build:
+      context: .
+      dockerfile: monolith/Dockerfile
+    ports:
+      - "8090:8080"
+    networks:
+      - jpetstore-network
+    restart: always
+
+  # ---------------------------------------------------------------------------
+  # Application: Microservices
+  # ---------------------------------------------------------------------------
+
+  # Account Service — manages Account/User bounded context (account, profile,
+  # signon, bannerdata). Issues JWT tokens for stateless authentication.
+  # Replaces AccountService.java and AccountMapper in the monolith.
+  account-service:
+    container_name: account-service
+    build:
+      context: .
+      dockerfile: account-service/Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      # PostgreSQL datasource configuration
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-account:5432/${ACCOUNT_DB_NAME:-jpetstore_account}
+      SPRING_DATASOURCE_USERNAME: ${ACCOUNT_DB_USER:-account_user}
+      SPRING_DATASOURCE_PASSWORD: ${ACCOUNT_DB_PASSWORD:-account_pass}
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
+      # JPA / Hibernate configuration
+      SPRING_JPA_HIBERNATE_DDL_AUTO: validate
+      SPRING_JPA_SHOW_SQL: "false"
+      SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+      # Liquibase schema management
+      SPRING_LIQUIBASE_ENABLED: "true"
+      SPRING_LIQUIBASE_CHANGE_LOG: classpath:db/changelog/db.changelog-master.xml
+      # JWT configuration for token issuance and validation
+      JWT_SECRET: ${JWT_SECRET:-jpetstore-jwt-secret-key-for-development-only-change-in-production}
+      JWT_EXPIRATION_MS: "3600000"
+      # Redis connection for session/state management
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      # Server port
+      SERVER_PORT: "8081"
+      # Catalog Service URL for personalization (getProductListByCategory)
+      CATALOG_SERVICE_URL: http://catalog-service:8082
+      # Spring profile
+      SPRING_PROFILES_ACTIVE: docker
+    depends_on:
+      postgres-account:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - jpetstore-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # Catalog Service — manages Catalog/Inventory bounded context (category,
+  # product, item, inventory, supplier). Provides read-only catalog browsing
+  # and atomic inventory decrement with optimistic locking.
+  # Replaces CatalogService.java and Category/Product/Item Mappers.
+  catalog-service:
+    container_name: catalog-service
+    build:
+      context: .
+      dockerfile: catalog-service/Dockerfile
+    ports:
+      - "8082:8082"
+    environment:
+      # PostgreSQL datasource configuration
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-catalog:5432/${CATALOG_DB_NAME:-jpetstore_catalog}
+      SPRING_DATASOURCE_USERNAME: ${CATALOG_DB_USER:-catalog_user}
+      SPRING_DATASOURCE_PASSWORD: ${CATALOG_DB_PASSWORD:-catalog_pass}
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
+      # JPA / Hibernate configuration
+      SPRING_JPA_HIBERNATE_DDL_AUTO: validate
+      SPRING_JPA_SHOW_SQL: "false"
+      SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+      # Liquibase schema management
+      SPRING_LIQUIBASE_ENABLED: "true"
+      SPRING_LIQUIBASE_CHANGE_LOG: classpath:db/changelog/db.changelog-master.xml
+      # Server port
+      SERVER_PORT: "8082"
+      # Spring profile
+      SPRING_PROFILES_ACTIVE: docker
+    depends_on:
+      postgres-catalog:
+        condition: service_healthy
+    networks:
+      - jpetstore-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8082/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # Order Service — manages Order/Cart bounded context (orders, orderstatus,
+  # lineitem). Implements Saga orchestration for the distributed order
+  # transaction that coordinates with Catalog Service for inventory reservation.
+  # Manages externalized cart state via Redis.
+  # Replaces OrderService.java and Order/LineItem/Sequence Mappers.
+  order-service:
+    container_name: order-service
+    build:
+      context: .
+      dockerfile: order-service/Dockerfile
+    ports:
+      - "8083:8083"
+    environment:
+      # PostgreSQL datasource configuration
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-order:5432/${ORDER_DB_NAME:-jpetstore_order}
+      SPRING_DATASOURCE_USERNAME: ${ORDER_DB_USER:-order_user}
+      SPRING_DATASOURCE_PASSWORD: ${ORDER_DB_PASSWORD:-order_pass}
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
+      # JPA / Hibernate configuration
+      SPRING_JPA_HIBERNATE_DDL_AUTO: validate
+      SPRING_JPA_SHOW_SQL: "false"
+      SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+      # Liquibase schema management
+      SPRING_LIQUIBASE_ENABLED: "true"
+      SPRING_LIQUIBASE_CHANGE_LOG: classpath:db/changelog/db.changelog-master.xml
+      # Redis connection for externalized cart state and session management
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      # Server port
+      SERVER_PORT: "8083"
+      # Inter-service communication URLs (REST clients)
+      ACCOUNT_SERVICE_URL: http://account-service:8081
+      CATALOG_SERVICE_URL: http://catalog-service:8082
+      # JWT configuration for service-to-service authentication with Account Service.
+      # Must use the same secret as Account Service and API Gateway.
+      JWT_SECRET: ${JWT_SECRET:-jpetstore-jwt-secret-key-for-development-only-change-in-production}
+      # Spring profile
+      SPRING_PROFILES_ACTIVE: docker
+    depends_on:
+      postgres-order:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      account-service:
+        condition: service_healthy
+      catalog-service:
+        condition: service_healthy
+    networks:
+      - jpetstore-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Application: API Gateway (Single Public Entry Point)
+  # ---------------------------------------------------------------------------
+
+  # Spring Cloud Gateway acting as the Strangler Fig façade. Routes each
+  # request to either the monolith or the appropriate microservice based on
+  # runtime-configurable per-service routing flags stored in Redis.
+  #
+  # Routing flags (stored in Redis):
+  #   routing.flag.account-service = "monolith" | "microservice"
+  #   routing.flag.catalog-service = "monolith" | "microservice"
+  #   routing.flag.order-service   = "monolith" | "microservice"
+  #
+  # Switching a flag value in Redis immediately redirects traffic for that
+  # service — no redeployment or restart required.
+  api-gateway:
+    container_name: api-gateway
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      # Redis connection for routing flag evaluation
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      # Monolith URL for fallback/coexistence routing
+      MONOLITH_URL: http://monolith:8080
+      # Microservice URLs for routed traffic
+      ACCOUNT_SERVICE_URL: http://account-service:8081
+      CATALOG_SERVICE_URL: http://catalog-service:8082
+      ORDER_SERVICE_URL: http://order-service:8083
+      # JWT configuration for authentication filter
+      JWT_SECRET: ${JWT_SECRET:-jpetstore-jwt-secret-key-for-development-only-change-in-production}
+      # Server port
+      SERVER_PORT: "8080"
+      # Spring profile
+      SPRING_PROFILES_ACTIVE: docker
+    depends_on:
+      monolith:
+        condition: service_started
+      account-service:
+        condition: service_healthy
+      catalog-service:
+        condition: service_healthy
+      order-service:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - jpetstore-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+# =============================================================================
+# Volumes — Named volumes for PostgreSQL data persistence
+# =============================================================================
+volumes:
+  # Persistent storage for Account Service PostgreSQL data
+  postgres-account-data:
+    driver: local
+  # Persistent storage for Catalog Service PostgreSQL data
+  postgres-catalog-data:
+    driver: local
+  # Persistent storage for Order Service PostgreSQL data
+  postgres-order-data:
+    driver: local
+
+# =============================================================================
+# Networks — Shared bridge network for inter-service communication
+# =============================================================================
+networks:
+  # All services communicate over this bridge network. Docker DNS resolves
+  # service names (e.g., postgres-account, redis, account-service) to container
+  # IPs within this network, enabling inter-service REST calls and database
+  # connections using Docker service names as hostnames.
+  jpetstore-network:
+    driver: bridge

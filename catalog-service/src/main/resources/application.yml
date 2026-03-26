@@ -1,0 +1,215 @@
+# =============================================================================
+# JPetStore Catalog Service — Spring Boot Application Configuration
+# =============================================================================
+#
+# Configuration for the Catalog/Inventory bounded context microservice.
+# This service owns the category, product, item, inventory, and supplier
+# tables and exposes REST APIs for catalog browsing, product search, and
+# atomic inventory management with optimistic locking.
+#
+# Replaces the monolith's XML-based Spring context (applicationContext.xml)
+# which used embedded HSQLDB, MyBatis SqlSessionFactoryBean, and
+# DataSourceTransactionManager. This configuration uses Spring Boot 3
+# auto-configuration with Spring Data JPA, Hibernate, PostgreSQL, and
+# Liquibase for schema management.
+#
+# Environment variable overrides (e.g. from docker-compose.yml) take
+# precedence over values defined here. See docker-compose.yml for
+# container-specific settings such as the PostgreSQL hostname.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Spring Application Identity
+# -----------------------------------------------------------------------------
+spring:
+  application:
+    name: catalog-service
+
+  # ---------------------------------------------------------------------------
+  # Datasource Configuration — PostgreSQL (Database-per-Service Pattern)
+  # ---------------------------------------------------------------------------
+  # Each microservice owns its exclusive PostgreSQL database. No service
+  # queries another service's database directly. Cross-service data is
+  # accessed exclusively via REST APIs.
+  #
+  # The monolith used an embedded HSQLDB via <jdbc:embedded-database> in
+  # applicationContext.xml. This is completely replaced by a dedicated
+  # PostgreSQL instance for the Catalog bounded context.
+  #
+  # HSQLDB is prohibited in all new services per architectural rules.
+  # ---------------------------------------------------------------------------
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://postgres-catalog:5432/jpetstore_catalog}
+    username: ${DB_USERNAME:catalog_user}
+    password: ${DB_PASSWORD:catalog_pass}
+    driver-class-name: org.postgresql.Driver
+
+    # HikariCP connection pool settings for production readiness
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+      idle-timeout: 300000
+      connection-timeout: 20000
+      max-lifetime: 1200000
+      pool-name: CatalogServiceHikariPool
+
+  # ---------------------------------------------------------------------------
+  # JPA / Hibernate Configuration
+  # ---------------------------------------------------------------------------
+  # Spring Data JPA with Hibernate replaces the monolith's MyBatis ORM.
+  # The monolith used SqlSessionFactoryBean with type aliases for the
+  # org.mybatis.jpetstore.domain package and mapper scanning of
+  # org.mybatis.jpetstore.mapper. Here, JPA entities in com.jpetstore.catalog
+  # are auto-discovered by Spring Boot's entity scanning.
+  # ---------------------------------------------------------------------------
+  jpa:
+    # Schema is managed entirely by Liquibase — Hibernate must NOT create,
+    # update, or validate schema on its own. Setting to 'none' ensures
+    # Liquibase is the single source of truth for DDL.
+    hibernate:
+      ddl-auto: validate
+
+    # Disable SQL logging in production to reduce log noise.
+    # Enable temporarily for debugging by setting to true or via env var.
+    show-sql: false
+
+    # Explicitly specify PostgreSQL dialect to ensure Hibernate generates
+    # optimal SQL for PostgreSQL rather than relying on auto-detection.
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+
+    # Disable Open Session in View (OSIV) anti-pattern. In a microservice
+    # architecture, lazy loading outside of transactional boundaries leads
+    # to unpredictable N+1 queries and should be avoided. All data fetching
+    # is done within service-layer @Transactional methods.
+    open-in-view: false
+
+    properties:
+      hibernate:
+        # Format SQL for readability when show-sql or SQL logging is enabled
+        format_sql: true
+        # Use batch inserts/updates for better performance during bulk operations
+        jdbc:
+          batch_size: 25
+        order_inserts: true
+        order_updates: true
+
+  # ---------------------------------------------------------------------------
+  # Liquibase Configuration — Schema Management
+  # ---------------------------------------------------------------------------
+  # Liquibase manages the Catalog Service's PostgreSQL schema via XML
+  # changelogs. The master changelog references versioned changeset files
+  # that define the category, product, item, inventory, and supplier tables
+  # along with their indexes (productCat, productName, itemProd) and
+  # intra-service foreign keys (product→category, item→product, item→supplier).
+  #
+  # Cross-service foreign keys (e.g. lineitem.itemid→item.itemid from the
+  # monolith schema) are deliberately NOT created — they are enforced at the
+  # application layer via REST API calls between services.
+  # ---------------------------------------------------------------------------
+  liquibase:
+    enabled: true
+    change-log: classpath:db/changelog/db.changelog-master.xml
+
+# -----------------------------------------------------------------------------
+# Server Configuration
+# -----------------------------------------------------------------------------
+# Port 8082 is the designated port for the Catalog Service per the API Gateway
+# routing table. This must match:
+#   - docker-compose.yml catalog-service port mapping (8082:8082)
+#   - API Gateway route configuration (http://catalog-service:8082)
+#   - Account Service's CATALOG_SERVICE_URL environment variable
+#   - Order Service's catalog-service client base URL
+# -----------------------------------------------------------------------------
+server:
+  port: 8082
+  # Graceful shutdown allows in-flight requests to complete before stopping
+  shutdown: graceful
+
+# -----------------------------------------------------------------------------
+# JWT Configuration (Service-to-Service Authentication)
+# -----------------------------------------------------------------------------
+# The Catalog Service validates JWT tokens on protected endpoints (inventory
+# write operations) for defense-in-depth. Tokens are issued by Account Service
+# (for user tokens) and by Order Service (for service-to-service tokens during
+# Saga orchestration). All services share the same HMAC-SHA signing secret
+# to enable cross-service JWT validation.
+#
+# The secret MUST match across all services:
+#   - Account Service: jwt.secret
+#   - Order Service: jwt.secret (AppConfig.generateServiceToken())
+#   - API Gateway: jwt.secret
+#   - Catalog Service: jwt.secret (this configuration)
+# -----------------------------------------------------------------------------
+jwt:
+  secret: ${JWT_SECRET:jpetstore-jwt-secret-key-for-development-only-change-in-production}
+  issuer: jpetstore
+
+# -----------------------------------------------------------------------------
+# Spring Boot Actuator — Health Checks and Monitoring
+# -----------------------------------------------------------------------------
+# Exposes health and info endpoints for Docker healthchecks, API Gateway
+# readiness probes, and operational monitoring. The health endpoint is
+# queried by docker-compose.yml:
+#   healthcheck:
+#     test: ["CMD-SHELL", "curl -sf http://localhost:8082/actuator/health || exit 1"]
+# -----------------------------------------------------------------------------
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+      # Include datasource and diskSpace health indicators
+      probes:
+        enabled: true
+  health:
+    db:
+      enabled: true
+    diskspace:
+      enabled: true
+
+# -----------------------------------------------------------------------------
+# Logging Configuration
+# -----------------------------------------------------------------------------
+# Production-appropriate log levels. The catalog service package logs at INFO
+# level for business operation visibility. Spring framework and Hibernate
+# internals are set to WARN to reduce noise while still capturing important
+# warnings about connection issues, deprecated features, or configuration
+# problems.
+# -----------------------------------------------------------------------------
+logging:
+  level:
+    com.jpetstore.catalog: INFO
+    org.springframework: WARN
+    org.hibernate.SQL: WARN
+    org.hibernate.type.descriptor.sql.BasicBinder: WARN
+    org.liquibase: INFO
+
+  # Structured log pattern for production log aggregation
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+# -----------------------------------------------------------------------------
+# Dual-Write Configuration (Coexistence Window)
+# -----------------------------------------------------------------------------
+# During the Strangler Fig coexistence window, every write to PostgreSQL
+# is asynchronously replicated to the monolith's HSQLDB to enable safe
+# rollback at any point before dual-write is disabled.
+#
+# Configuration for the DualWriteConfig class:
+# - enabled: false by default; set to true when coexistence begins
+# - hsqldb.url: HSQLDB connection used ONLY for dual-write replication
+# - max-lag-seconds: maximum acceptable replication lag (AAP Section 0.7.5)
+#
+# Dual-write is disabled only after a 48-hour observation window passes
+# with no incidents — this is the point of no return for that service.
+# -----------------------------------------------------------------------------
+dualwrite:
+  enabled: false
+  hsqldb:
+    url: jdbc:hsqldb:hsql://localhost:9001/jpetstore
+    username: SA
+    password: ""
+  max-lag-seconds: 5
