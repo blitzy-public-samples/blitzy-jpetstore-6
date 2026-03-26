@@ -53,11 +53,21 @@ FROM maven:3.9-eclipse-temurin-17 AS build
 
 WORKDIR /app
 
-# Copy the parent POM and order-service POM first for Docker layer caching of
-# dependencies. This layer is only rebuilt when POM files change, saving
+# Copy the parent POM and ALL child module POMs first for Docker layer caching
+# of dependencies. This layer is only rebuilt when POM files change, saving
 # significant build time on iterative source code changes.
+#
+# CRITICAL: The parent POM declares all 6 child modules (<modules> section).
+# Maven's reactor resolution requires every declared child module POM to exist,
+# even when building a single module with -pl. Without these POMs, the build
+# fails with "Child module does not exist" errors.
 COPY pom.xml ./pom.xml
 COPY order-service/pom.xml ./order-service/pom.xml
+COPY monolith/pom.xml ./monolith/pom.xml
+COPY api-gateway/pom.xml ./api-gateway/pom.xml
+COPY account-service/pom.xml ./account-service/pom.xml
+COPY catalog-service/pom.xml ./catalog-service/pom.xml
+COPY migration/pom.xml ./migration/pom.xml
 
 # Download all dependencies into the local Maven cache (cached layer).
 # Uses -pl order-service -am to resolve the parent POM and order-service deps.
@@ -74,7 +84,7 @@ COPY order-service/src/ ./order-service/src/
 # -am               : Also build any modules that order-service depends on (parent)
 # Tests are skipped here — they are executed separately in the CI pipeline.
 RUN mvn clean package -DskipTests -B -pl order-service -am \
-    && mv order-service/target/*.jar order-service/target/app.jar
+    && mv order-service/target/*-exec.jar order-service/target/app.jar
 
 # -----------------------------------------------------------------------------
 # Stage 2: RUNTIME — Minimal JRE image for production deployment

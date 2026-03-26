@@ -251,17 +251,12 @@ services:
       # Liquibase schema management
       SPRING_LIQUIBASE_ENABLED: "true"
       SPRING_LIQUIBASE_CHANGE_LOG: classpath:db/changelog/db.changelog-master.xml
-      # Redis connection
-      SPRING_DATA_REDIS_HOST: redis
-      SPRING_DATA_REDIS_PORT: "6379"
       # Server port
       SERVER_PORT: "8082"
       # Spring profile
       SPRING_PROFILES_ACTIVE: docker
     depends_on:
       postgres-catalog:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     networks:
       - jpetstore-network

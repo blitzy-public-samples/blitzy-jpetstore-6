@@ -39,7 +39,7 @@ spring:
   # HSQLDB is prohibited in all new services per architectural rules.
   # ---------------------------------------------------------------------------
   datasource:
-    url: ${DB_URL:jdbc:postgresql://catalog-db:5432/jpetstore_catalog}
+    url: ${DB_URL:jdbc:postgresql://postgres-catalog:5432/jpetstore_catalog}
     username: ${DB_USERNAME:catalog_user}
     password: ${DB_PASSWORD:catalog_pass}
     driver-class-name: org.postgresql.Driver
@@ -141,7 +141,7 @@ server:
 #   - Catalog Service: jwt.secret (this configuration)
 # -----------------------------------------------------------------------------
 jwt:
-  secret: ${JWT_SECRET:jpetstore-shared-jwt-secret-key-change-in-production-minimum-256-bits}
+  secret: ${JWT_SECRET:jpetstore-jwt-secret-key-for-development-only-change-in-production}
   issuer: jpetstore
 
 # -----------------------------------------------------------------------------
@@ -190,3 +190,26 @@ logging:
   # Structured log pattern for production log aggregation
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+# -----------------------------------------------------------------------------
+# Dual-Write Configuration (Coexistence Window)
+# -----------------------------------------------------------------------------
+# During the Strangler Fig coexistence window, every write to PostgreSQL
+# is asynchronously replicated to the monolith's HSQLDB to enable safe
+# rollback at any point before dual-write is disabled.
+#
+# Configuration for the DualWriteConfig class:
+# - enabled: false by default; set to true when coexistence begins
+# - hsqldb.url: HSQLDB connection used ONLY for dual-write replication
+# - max-lag-seconds: maximum acceptable replication lag (AAP Section 0.7.5)
+#
+# Dual-write is disabled only after a 48-hour observation window passes
+# with no incidents — this is the point of no return for that service.
+# -----------------------------------------------------------------------------
+dualwrite:
+  enabled: false
+  hsqldb:
+    url: jdbc:hsqldb:hsql://localhost:9001/jpetstore
+    username: SA
+    password: ""
+  max-lag-seconds: 5

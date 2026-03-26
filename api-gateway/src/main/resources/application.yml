@@ -76,7 +76,7 @@ routing:
 # for production deployments.
 # =============================================================================
 jwt:
-  secret: ${JWT_SECRET:jpetstore-shared-jwt-secret-key-change-in-production-minimum-256-bits}
+  secret: ${JWT_SECRET:jpetstore-jwt-secret-key-for-development-only-change-in-production}
   issuer: jpetstore
   expiration: 3600
 
@@ -93,6 +93,16 @@ management:
   endpoint:
     health:
       show-details: always
+    # Disable the gateway routes actuator endpoint. Spring Cloud Gateway's
+    # /actuator/gateway/routes endpoint eagerly resolves all route destination
+    # hostnames during introspection. When the monolith container is not running,
+    # DNS resolution for 'monolith' fails, causing a 500 Internal Server Error.
+    # Since the health and info endpoints (used by Docker healthchecks and
+    # operational monitoring) work independently of route targets, disabling
+    # the gateway actuator endpoint prevents spurious 500 errors without
+    # affecting any runtime routing or health check functionality.
+    gateway:
+      access: none
 
 # =============================================================================
 # Service URL Configuration (Custom Properties)

@@ -78,8 +78,8 @@ spring:
   # ---------------------------------------------------------------------------
   datasource:
     url: ${DB_URL:jdbc:postgresql://postgres-order:5432/jpetstore_order}
-    username: ${DB_USERNAME:jpetstore}
-    password: ${DB_PASSWORD:jpetstore}
+    username: ${DB_USERNAME:order_user}
+    password: ${DB_PASSWORD:order_pass}
     driver-class-name: org.postgresql.Driver
     hikari:
       maximum-pool-size: 10
@@ -175,7 +175,7 @@ spring:
 # as an internal service rather than a user session.
 # -----------------------------------------------------------------------------
 jwt:
-  secret: ${JWT_SECRET:jpetstore-shared-jwt-secret-key-change-in-production-minimum-256-bits}
+  secret: ${JWT_SECRET:jpetstore-jwt-secret-key-for-development-only-change-in-production}
   expiration-ms: 3600000
   issuer: jpetstore
 
@@ -202,9 +202,9 @@ jwt:
 # -----------------------------------------------------------------------------
 services:
   account-service:
-    url: http://account-service:8081
+    url: ${ACCOUNT_SERVICE_URL:http://account-service:8081}
   catalog-service:
-    url: http://catalog-service:8082
+    url: ${CATALOG_SERVICE_URL:http://catalog-service:8082}
 
 # -----------------------------------------------------------------------------
 # Actuator / Management Configuration
@@ -223,7 +223,7 @@ management:
         include: health,info
   endpoint:
     health:
-      show-details: when-authorized
+      show-details: always
       probes:
         enabled: true
     metrics:
