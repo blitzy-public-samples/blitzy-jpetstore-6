@@ -16,14 +16,11 @@
 package com.jpetstore.order.controller;
 
 import java.util.List;
-import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.validation.annotation.Validated;
-import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -39,7 +36,12 @@ import com.jpetstore.order.service.OrderService;
 import jakarta.validation.Valid;
 
 /**
- * REST controller for order management in the Order Service.
+ * REST controller for order management in the Order Service microservice.
+ *
+ * <p>This controller is a <strong>thin HTTP adapter</strong> that maps REST endpoints
+ * to {@link OrderService} method calls. It contains zero business logic — all order
+ * construction, total price computation, line item creation, saga orchestration,
+ * user verification, and cart retrieval is delegated to {@link OrderService}.</p>
  *
  * <p>Exposes the three core order endpoints defined in the AAP (§0.4.1, §0.5.1):</p>
  * <ul>
@@ -50,14 +52,18 @@ import jakarta.validation.Valid;
  *
  * <p>These endpoints correspond to the monolith's {@code OrderActionBean} methods:</p>
  * <table>
- *   <tr><th>Monolith</th><th>REST Endpoint</th></tr>
- *   <tr><td>{@code OrderActionBean.newOrder()}</td><td>{@code POST /api/orders}</td></tr>
- *   <tr><td>{@code OrderActionBean.listOrders()}</td><td>{@code GET /api/orders?username=}</td></tr>
- *   <tr><td>{@code OrderActionBean.viewOrder()}</td><td>{@code GET /api/orders/{id}}</td></tr>
+ *   <tr><th>Monolith Method</th><th>REST Endpoint</th></tr>
+ *   <tr><td>{@code OrderActionBean.newOrder()} (lines 142-164)</td>
+ *       <td>{@code POST /api/orders}</td></tr>
+ *   <tr><td>{@code OrderActionBean.listOrders()} (lines 107-112)</td>
+ *       <td>{@code GET /api/orders?username=}</td></tr>
+ *   <tr><td>{@code OrderActionBean.viewOrder()} (lines 171-185)</td>
+ *       <td>{@code GET /api/orders/{id}}</td></tr>
  * </table>
  *
  * <h3>Order Creation Flow (POST /api/orders)</h3>
- * <p>Per AAP §0.7.1, the order creation endpoint triggers the 3-step Saga:</p>
+ * <p>Per AAP §0.7.1, the order creation endpoint triggers the 3-step Saga
+ * orchestrated by {@link OrderService#insertOrder(OrderRequest)}:</p>
  * <ol>
  *   <li>CREATE_ORDER — Persist order with PENDING status</li>
  *   <li>RESERVE_INVENTORY — Call Catalog Service to decrement inventory</li>
@@ -65,13 +71,18 @@ import jakarta.validation.Valid;
  * </ol>
  *
  * <h3>Error Handling</h3>
- * <p>Provides structured JSON error responses for all failure modes:</p>
+ * <p>Errors are handled by letting exceptions propagate to Spring's default
+ * exception handling mechanism or a {@code @ControllerAdvice}:</p>
  * <ul>
- *   <li>400 Bad Request — Invalid or missing fields in the order request</li>
- *   <li>404 Not Found — Order not found by ID</li>
- *   <li>409 Conflict — Order creation failed (Saga resulted in FAILED status)</li>
- *   <li>500 Internal Server Error — Unexpected system errors</li>
+ *   <li>400 Bad Request — Validation failures from {@code @Valid} on OrderRequest
+ *       (auto-handled by Spring)</li>
+ *   <li>500 Internal Server Error — Runtime exceptions from OrderService</li>
  * </ul>
+ *
+ * <h3>Authentication Note</h3>
+ * <p>Per AAP §0.7.6, the API Gateway's JWT filter ensures only authenticated
+ * users reach protected endpoints. The controller trusts the {@code username}
+ * parameter — the gateway validates the JWT and passes claims downstream.</p>
  *
  * @author Blitzy Platform
  * @see OrderService
@@ -80,15 +91,23 @@ import jakarta.validation.Valid;
  */
 @RestController
 @RequestMapping("/api/orders")
-@Validated
 public class OrderController {
 
     private static final Logger log = LoggerFactory.getLogger(OrderController.class);
 
+    /**
+     * Order business logic service. All operations — order creation with Saga
+     * orchestration, order retrieval, and order listing — are delegated to this
+     * service. The controller performs no business logic.
+     */
     private final OrderService orderService;
 
     /**
-     * Constructs the order controller with its service dependency.
+     * Constructs the OrderController with its single service dependency.
+     *
+     * <p>Uses Spring's constructor injection (no {@code @Autowired} needed for
+     * single-constructor classes in Spring Boot). The OrderService bean is
+     * automatically resolved from the application context.</p>
      *
      * @param orderService the order business logic service
      */
@@ -103,154 +122,76 @@ public class OrderController {
     /**
      * Creates a new order via the Saga orchestration pattern.
      *
-     * <p>Per AAP §0.4.1: {@code POST /api/orders} — order placement with Saga.
-     * The request body contains all shipping, billing, payment, and cart
-     * reference data. Line items are populated from the externalized cart
-     * state identified by {@code cartSessionId}.</p>
+     * <p>Maps to the monolith's {@code OrderActionBean.newOrder()} (lines 142-164)
+     * combined with {@code OrderService.insertOrder(Order)} (lines 59-77).
+     * The monolith's multi-step checkout state machine (newOrderForm → shipping
+     * → confirm → submit) remains in the monolith's updated ActionBeans. This
+     * REST API only receives the FINAL confirmed order request.</p>
      *
-     * <p>The Saga flow (AAP §0.7.1):</p>
-     * <ol>
-     *   <li>CREATE_ORDER: Persist order with PENDING status, line items, order status</li>
-     *   <li>RESERVE_INVENTORY: REST call to Catalog Service to decrement inventory</li>
-     *   <li>CONFIRM_ORDER: Update order status to CONFIRMED (or FAILED on error)</li>
-     * </ol>
+     * <p>The {@code @Valid} annotation triggers Jakarta Bean Validation on all
+     * {@code @NotBlank} constraints defined on {@link OrderRequest} fields
+     * (username, addresses, payment info, cartSessionId). Spring Boot
+     * auto-returns 400 Bad Request on validation failure.</p>
      *
-     * <p>Response codes:</p>
-     * <ul>
-     *   <li>201 Created — order successfully placed and confirmed</li>
-     *   <li>409 Conflict — order created but Saga failed (e.g., insufficient inventory)</li>
-     *   <li>400 Bad Request — invalid request (missing fields, empty cart)</li>
-     *   <li>500 Internal Server Error — unexpected failure</li>
-     * </ul>
+     * <p>All business logic is delegated to {@link OrderService#insertOrder(OrderRequest)}
+     * which performs: user verification via AccountServiceClient, cart retrieval
+     * from Redis via CartStateService, Order entity construction, Saga execution
+     * via OrderSagaOrchestrator, cart clearing, and DTO conversion.</p>
      *
-     * @param request the validated order request DTO
-     * @return the created order as {@link OrderDTO}
+     * @param request the validated order request DTO containing username,
+     *                shipping/billing addresses, payment info, and cart session ID
+     * @return 201 Created with the created {@link OrderDTO}
      */
     @PostMapping
     public ResponseEntity<OrderDTO> createOrder(@Valid @RequestBody OrderRequest request) {
-        log.info("Received order creation request for user: {}, cartSession: {}",
-                request.getUsername(), request.getCartSessionId());
-
-        OrderDTO createdOrder = orderService.createOrder(request);
-
-        // Check if the Saga completed successfully or resulted in a FAILED state
-        if ("FAILED".equals(createdOrder.getStatus())) {
-            log.warn("Order {} created but Saga failed — status: FAILED",
-                    createdOrder.getOrderId());
-            return ResponseEntity.status(HttpStatus.CONFLICT).body(createdOrder);
-        }
-
-        log.info("Order {} created successfully with status: {}",
-                createdOrder.getOrderId(), createdOrder.getStatus());
-        return ResponseEntity.status(HttpStatus.CREATED).body(createdOrder);
+        log.info("Creating order for user: {}", request.getUsername());
+        OrderDTO order = orderService.insertOrder(request);
+        log.info("Order created successfully: orderId={}", order.getOrderId());
+        return ResponseEntity.status(HttpStatus.CREATED).body(order);
     }
 
     /**
-     * Lists all orders for a specific user, sorted by order date descending.
+     * Lists all orders for a specific user.
      *
-     * <p>Per AAP §0.4.1: {@code GET /api/orders?username={username}} — list orders.
-     * Returns an empty list if no orders exist for the given username.</p>
-     *
-     * <p>Called by the monolith's {@code OrderActionBean.listOrders()} which
-     * passes the authenticated user's username.</p>
+     * <p>Maps to the monolith's {@code OrderActionBean.listOrders()} (lines 107-112)
+     * which retrieves the authenticated user from session and calls
+     * {@code orderService.getOrdersByUsername(username)}. In the microservice,
+     * the authenticated username is passed as a query parameter — the API
+     * Gateway's JWT filter ensures only the authenticated user's own username
+     * is passed, preserving the monolith's access control behavior.</p>
      *
      * @param username the username to search for (required query parameter)
-     * @return list of orders as {@link OrderDTO} objects
+     * @return 200 OK with list of {@link OrderDTO} objects (may be empty)
      */
     @GetMapping
-    public ResponseEntity<List<OrderDTO>> getOrdersByUsername(
-            @RequestParam("username") String username) {
-        log.debug("Listing orders for user: {}", username);
-
-        if (username == null || username.isBlank()) {
-            return ResponseEntity.badRequest().build();
-        }
-
+    public ResponseEntity<List<OrderDTO>> getOrdersByUsername(@RequestParam String username) {
+        log.info("Listing orders for user: {}", username);
         List<OrderDTO> orders = orderService.getOrdersByUsername(username);
-        log.debug("Found {} orders for user: {}", orders.size(), username);
         return ResponseEntity.ok(orders);
     }
 
     /**
      * Retrieves a single order by its primary key.
      *
-     * <p>Per AAP §0.4.1: {@code GET /api/orders/{id}} — get order by ID.
-     * Returns 404 if the order does not exist.</p>
+     * <p>Maps to the monolith's {@code OrderActionBean.viewOrder()} (lines 171-185)
+     * combined with {@code OrderService.getOrder(int)} (lines 87-99). In the
+     * monolith, {@code viewOrder()} checks ownership by comparing the session
+     * user's username with the order's username. In the microservice, ownership
+     * verification can be handled in the service layer or by the API Gateway's
+     * JWT filter which ensures only authenticated users reach this endpoint.</p>
      *
-     * <p>Called by the monolith's {@code OrderActionBean.viewOrder()} which
-     * passes the selected order ID from the order list or confirmation page.</p>
+     * <p>If the order is not found, {@link OrderService#getOrder(int)} throws
+     * a RuntimeException which results in an appropriate error response
+     * (handled by Spring's default exception handling or a
+     * {@code @ControllerAdvice}).</p>
      *
-     * @param orderId the order identifier
-     * @return the order as {@link OrderDTO}, or 404 if not found
+     * @param orderId the order identifier (integer, from path variable)
+     * @return 200 OK with the {@link OrderDTO}
      */
-    @GetMapping("/{orderId}")
-    public ResponseEntity<OrderDTO> getOrderById(@PathVariable("orderId") int orderId) {
-        log.debug("Retrieving order by id: {}", orderId);
-
-        OrderDTO order = orderService.getOrderById(orderId);
-        if (order == null) {
-            log.debug("Order not found: {}", orderId);
-            return ResponseEntity.notFound().build();
-        }
-
+    @GetMapping("/{id}")
+    public ResponseEntity<OrderDTO> getOrder(@PathVariable("id") int orderId) {
+        log.info("Retrieving order: {}", orderId);
+        OrderDTO order = orderService.getOrder(orderId);
         return ResponseEntity.ok(order);
-    }
-
-    // -----------------------------------------------------------------------
-    // Exception Handlers
-    // -----------------------------------------------------------------------
-
-    /**
-     * Handles validation errors for order request body.
-     *
-     * <p>Catches {@link jakarta.validation.ConstraintViolationException} and
-     * {@link org.springframework.web.bind.MethodArgumentNotValidException}
-     * to return a structured 400 Bad Request response.</p>
-     *
-     * @param ex the validation exception
-     * @return 400 response with error details
-     */
-    @ExceptionHandler(org.springframework.web.bind.MethodArgumentNotValidException.class)
-    public ResponseEntity<Map<String, String>> handleValidationException(
-            org.springframework.web.bind.MethodArgumentNotValidException ex) {
-        String message = ex.getBindingResult().getFieldErrors().stream()
-                .map(fe -> fe.getField() + ": " + fe.getDefaultMessage())
-                .reduce((a, b) -> a + "; " + b)
-                .orElse("Validation failed");
-        log.warn("Order request validation failed: {}", message);
-        return ResponseEntity.badRequest()
-                .body(Map.of("error", "Validation failed", "details", message));
-    }
-
-    /**
-     * Handles illegal argument errors (e.g., empty cart, cart not found).
-     *
-     * @param ex the IllegalArgumentException
-     * @return 400 response with error message
-     */
-    @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<Map<String, String>> handleIllegalArgument(
-            IllegalArgumentException ex) {
-        log.warn("Order creation failed with IllegalArgumentException: {}", ex.getMessage());
-        return ResponseEntity.badRequest()
-                .body(Map.of("error", ex.getMessage()));
-    }
-
-    /**
-     * Handles unexpected runtime errors during order processing.
-     *
-     * <p>Provides a structured JSON error response instead of exposing
-     * internal exception stack traces to clients.</p>
-     *
-     * @param ex the RuntimeException
-     * @return 500 response with error message
-     */
-    @ExceptionHandler(RuntimeException.class)
-    public ResponseEntity<Map<String, String>> handleRuntimeException(
-            RuntimeException ex) {
-        log.error("Unexpected error during order processing: {}", ex.getMessage(), ex);
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(Map.of("error", "Internal server error",
-                        "message", ex.getMessage() != null ? ex.getMessage() : "Unknown error"));
     }
 }
