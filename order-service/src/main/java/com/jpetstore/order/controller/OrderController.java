@@ -15,22 +15,29 @@
  */
 package com.jpetstore.order.controller;
 
+import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jpetstore.order.dto.OrderDTO;
 import com.jpetstore.order.dto.OrderRequest;
+import com.jpetstore.order.exception.ResourceNotFoundException;
 import com.jpetstore.order.service.OrderService;
 
 import jakarta.validation.Valid;
@@ -71,18 +78,23 @@ import jakarta.validation.Valid;
  * </ol>
  *
  * <h3>Error Handling</h3>
- * <p>Errors are handled by letting exceptions propagate to Spring's default
- * exception handling mechanism or a {@code @ControllerAdvice}:</p>
+ * <p>Errors are handled via controller-level {@code @ExceptionHandler} methods:</p>
  * <ul>
  *   <li>400 Bad Request — Validation failures from {@code @Valid} on OrderRequest
  *       (auto-handled by Spring)</li>
- *   <li>500 Internal Server Error — Runtime exceptions from OrderService</li>
+ *   <li>403 Forbidden — Authorization failure when the requested username does not
+ *       match the authenticated principal (BOLA prevention per OWASP API #1)</li>
+ *   <li>404 Not Found — Order not found by ID (via {@link ResourceNotFoundException})</li>
+ *   <li>500 Internal Server Error — Unexpected runtime exceptions from OrderService</li>
  * </ul>
  *
- * <h3>Authentication Note</h3>
- * <p>Per AAP §0.7.6, the API Gateway's JWT filter ensures only authenticated
- * users reach protected endpoints. The controller trusts the {@code username}
- * parameter — the gateway validates the JWT and passes claims downstream.</p>
+ * <h3>Authorization</h3>
+ * <p>Per AAP §0.7.6, the API Gateway validates the JWT and passes it downstream.
+ * This controller extracts the authenticated username from the JWT token's
+ * {@code sub} claim and compares it against the requested username to enforce
+ * object-level authorization — preventing users from accessing other users' data.
+ * This mirrors the monolith's implicit protection where {@code OrderActionBean.listOrders()}
+ * uses the session-scoped account bean (not a user-supplied parameter).</p>
  *
  * @author Blitzy Platform
  * @see OrderService
@@ -103,16 +115,25 @@ public class OrderController {
     private final OrderService orderService;
 
     /**
-     * Constructs the OrderController with its single service dependency.
+     * Jackson ObjectMapper for JWT payload deserialization. Reused across requests
+     * for efficient JSON parsing when extracting the {@code sub} claim from
+     * JWT tokens during authorization checks.
+     */
+    private final ObjectMapper objectMapper;
+
+    /**
+     * Constructs the OrderController with its dependencies.
      *
      * <p>Uses Spring's constructor injection (no {@code @Autowired} needed for
-     * single-constructor classes in Spring Boot). The OrderService bean is
-     * automatically resolved from the application context.</p>
+     * single-constructor classes in Spring Boot). The OrderService bean and
+     * ObjectMapper are automatically resolved from the application context.</p>
      *
      * @param orderService the order business logic service
+     * @param objectMapper Jackson ObjectMapper for JWT payload parsing
      */
-    public OrderController(OrderService orderService) {
+    public OrderController(OrderService orderService, ObjectMapper objectMapper) {
         this.orderService = orderService;
+        this.objectMapper = objectMapper;
     }
 
     // -----------------------------------------------------------------------
@@ -155,16 +176,45 @@ public class OrderController {
      *
      * <p>Maps to the monolith's {@code OrderActionBean.listOrders()} (lines 107-112)
      * which retrieves the authenticated user from session and calls
-     * {@code orderService.getOrdersByUsername(username)}. In the microservice,
-     * the authenticated username is passed as a query parameter — the API
-     * Gateway's JWT filter ensures only the authenticated user's own username
-     * is passed, preserving the monolith's access control behavior.</p>
+     * {@code orderService.getOrdersByUsername(username)}. In the monolith, the
+     * session-scoped {@code AccountActionBean} inherently restricts access to
+     * the authenticated user's own data. In the microservice, this method
+     * enforces the same restriction by extracting the authenticated username
+     * from the JWT token's {@code sub} claim and comparing it against the
+     * requested username.</p>
      *
-     * @param username the username to search for (required query parameter)
-     * @return 200 OK with list of {@link OrderDTO} objects (may be empty)
+     * <h4>Authorization (BOLA Prevention — OWASP API Security #1)</h4>
+     * <p>The API Gateway validates the JWT signature and forwards the token
+     * downstream. This method decodes the JWT payload (without re-validating
+     * the signature, since the gateway already did) and extracts the {@code sub}
+     * claim to determine the authenticated user's identity. If the authenticated
+     * username does not match the requested username, a 403 Forbidden response
+     * is returned. If no JWT token is present (e.g., during testing or internal
+     * service calls), the request proceeds without authorization checks.</p>
+     *
+     * @param username            the username to search for (required query parameter)
+     * @param authorizationHeader the Authorization header containing the Bearer JWT token
+     *                            (optional — may be absent for internal service-to-service calls)
+     * @return 200 OK with list of {@link OrderDTO} objects (may be empty),
+     *         or 403 Forbidden if the authenticated user does not match the requested username
      */
     @GetMapping
-    public ResponseEntity<List<OrderDTO>> getOrdersByUsername(@RequestParam String username) {
+    public ResponseEntity<List<OrderDTO>> getOrdersByUsername(
+            @RequestParam String username,
+            @RequestHeader(value = "Authorization", required = false) String authorizationHeader) {
+
+        // Authorization check: verify the authenticated user matches the requested username.
+        // This prevents Broken Object Level Authorization (BOLA — OWASP API Security #1)
+        // where any authenticated user could read another user's order history.
+        // The monolith's OrderActionBean.listOrders() inherently prevents this because it
+        // uses the session-scoped account bean, not a user-supplied parameter.
+        String authenticatedUser = extractUsernameFromToken(authorizationHeader);
+        if (authenticatedUser != null && !authenticatedUser.equals(username)) {
+            log.warn("Authorization denied: authenticated user '{}' attempted to access "
+                    + "orders for user '{}'", authenticatedUser, username);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+
         log.info("Listing orders for user: {}", username);
         List<OrderDTO> orders = orderService.getOrdersByUsername(username);
         return ResponseEntity.ok(orders);
@@ -181,17 +231,97 @@ public class OrderController {
      * JWT filter which ensures only authenticated users reach this endpoint.</p>
      *
      * <p>If the order is not found, {@link OrderService#getOrder(int)} throws
-     * a RuntimeException which results in an appropriate error response
-     * (handled by Spring's default exception handling or a
-     * {@code @ControllerAdvice}).</p>
+     * a {@link ResourceNotFoundException} which is caught by the controller-level
+     * {@link #handleResourceNotFound(ResourceNotFoundException)} exception handler
+     * and returns a 404 Not Found JSON response.</p>
      *
      * @param orderId the order identifier (integer, from path variable)
-     * @return 200 OK with the {@link OrderDTO}
+     * @return 200 OK with the {@link OrderDTO}, or 404 Not Found if the order does not exist
      */
     @GetMapping("/{id}")
     public ResponseEntity<OrderDTO> getOrder(@PathVariable("id") int orderId) {
         log.info("Retrieving order: {}", orderId);
         OrderDTO order = orderService.getOrder(orderId);
         return ResponseEntity.ok(order);
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // Exception Handlers
+    // ───────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Handles {@link ResourceNotFoundException} thrown by service methods when
+     * a requested entity (order, line item, etc.) does not exist.
+     *
+     * <p>Returns a 404 Not Found response with a JSON body containing the error
+     * message. This matches the error handling pattern used in {@code CartController}
+     * for consistency across the Order Service's REST API.</p>
+     *
+     * @param ex the exception containing the error message
+     * @return 404 Not Found response with JSON body {@code {"error": "<message>"}}
+     */
+    @ExceptionHandler(ResourceNotFoundException.class)
+    public ResponseEntity<Map<String, String>> handleResourceNotFound(ResourceNotFoundException ex) {
+        log.warn("Resource not found: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(Map.of("error", ex.getMessage()));
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // Private Helper Methods
+    // ───────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Extracts the authenticated username from a JWT Bearer token in the
+     * Authorization header.
+     *
+     * <p>The JWT signature is NOT re-validated here because the API Gateway
+     * has already verified it (per AAP §0.7.6). This method only decodes the
+     * payload (middle segment) using Base64 to read the {@code sub} claim,
+     * which contains the authenticated username.</p>
+     *
+     * <p>Returns {@code null} if:</p>
+     * <ul>
+     *   <li>The Authorization header is null or empty</li>
+     *   <li>The header does not start with "Bearer "</li>
+     *   <li>The JWT token is malformed (not 3 dot-separated parts)</li>
+     *   <li>The payload cannot be parsed as JSON</li>
+     *   <li>The {@code sub} claim is missing from the payload</li>
+     * </ul>
+     *
+     * <p>When {@code null} is returned, the caller should allow the request
+     * to proceed (graceful degradation for service-to-service calls or testing
+     * scenarios where no JWT is present).</p>
+     *
+     * @param authorizationHeader the full Authorization header value (e.g., "Bearer eyJ...")
+     * @return the username from the JWT's {@code sub} claim, or {@code null} if extraction fails
+     */
+    private String extractUsernameFromToken(String authorizationHeader) {
+        if (authorizationHeader == null || !authorizationHeader.startsWith("Bearer ")) {
+            return null;
+        }
+
+        try {
+            String token = authorizationHeader.substring(7);
+            // JWT structure: header.payload.signature — we only need the payload (index 1)
+            String[] parts = token.split("\\.");
+            if (parts.length < 2) {
+                log.warn("Malformed JWT token: expected at least 2 dot-separated parts");
+                return null;
+            }
+
+            // Decode the payload (Base64URL-encoded JSON)
+            String payload = new String(Base64.getUrlDecoder().decode(parts[1]));
+            JsonNode jsonNode = objectMapper.readTree(payload);
+            JsonNode subNode = jsonNode.get("sub");
+            if (subNode == null || subNode.isNull()) {
+                log.warn("JWT token missing 'sub' claim");
+                return null;
+            }
+            return subNode.asText();
+        } catch (Exception ex) {
+            log.warn("Failed to extract username from JWT token: {}", ex.getMessage());
+            return null;
+        }
     }
 }

@@ -115,6 +115,17 @@
 
   <build>
     <plugins>
+      <!-- Surefire — unit tests only; exclude *IT integration tests (run by failsafe) -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <excludes>
+            <exclude>**/*IT.java</exclude>
+          </excludes>
+          <excludedGroups>integration</excludedGroups>
+        </configuration>
+      </plugin>
       <!-- Spring Boot Maven Plugin — builds executable JAR with embedded Tomcat -->
       <plugin>
         <groupId>org.springframework.boot</groupId>

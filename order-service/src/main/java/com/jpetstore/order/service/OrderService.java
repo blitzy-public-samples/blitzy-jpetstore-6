@@ -36,6 +36,7 @@ import com.jpetstore.order.entity.CartState;
 import com.jpetstore.order.entity.LineItem;
 import com.jpetstore.order.entity.Order;
 import com.jpetstore.order.entity.OrderStatus;
+import com.jpetstore.order.exception.ResourceNotFoundException;
 import com.jpetstore.order.repository.LineItemRepository;
 import com.jpetstore.order.repository.OrderRepository;
 import com.jpetstore.order.repository.OrderStatusRepository;
@@ -94,6 +95,14 @@ import com.jpetstore.order.saga.OrderSagaOrchestrator;
 public class OrderService {
 
     private static final Logger log = LoggerFactory.getLogger(OrderService.class);
+
+    /**
+     * Default maximum number of orders returned by {@link #getOrdersByUsername(String)}.
+     * Prevents unbounded result sets for users with many orders. Value of 100 is a
+     * sensible default for the JPetStore pet store context where order counts per user
+     * are typically small.
+     */
+    static final int DEFAULT_ORDER_LIST_LIMIT = 100;
 
     /** Spring Data JPA repository for Order entity. Used for read-only queries. */
     private final OrderRepository orderRepository;
@@ -235,10 +244,19 @@ public class OrderService {
         log.info("Order saga completed: orderId={}, status={}",
                 savedOrder.getOrderId(), savedOrder.getStatus());
 
-        // Step 6: Clear cart after successful order placement.
-        // Replaces the monolith's CartActionBean.clear() called in OrderActionBean
-        cartStateService.clearCart(request.getCartSessionId());
-        log.debug("Cart cleared for session: {}", request.getCartSessionId());
+        // Step 6: Clear cart ONLY after successful order placement.
+        // The monolith only clears the cart on a successful order — the cart persists
+        // if the order fails (e.g., insufficient inventory). The saga may return an
+        // Order with status=FAILED without throwing an exception (when inventory
+        // reservation fails gracefully), so we must check the status before clearing.
+        // This preserves the monolith's behavior per AAP §0.8.1 zero business logic change.
+        if ("CONFIRMED".equals(savedOrder.getStatus())) {
+            cartStateService.clearCart(request.getCartSessionId());
+            log.debug("Cart cleared for session: {}", request.getCartSessionId());
+        } else {
+            log.warn("Order saga did not confirm order (status={}). Cart NOT cleared for session: {}",
+                    savedOrder.getStatus(), request.getCartSessionId());
+        }
 
         // Step 7: Convert and return
         OrderDTO result = convertToDTO(savedOrder);
@@ -260,7 +278,8 @@ public class OrderService {
      *
      * @param orderId the order identifier to look up
      * @return the order as an {@link OrderDTO}
-     * @throws RuntimeException if the order is not found
+     * @throws ResourceNotFoundException if the order is not found (results in HTTP 404
+     *         via {@code @ExceptionHandler} in OrderController)
      */
     @Transactional(readOnly = true)
     public OrderDTO getOrder(int orderId) {
@@ -269,7 +288,7 @@ public class OrderService {
         Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> {
                     log.error("Order not found: orderId={}", orderId);
-                    return new RuntimeException("Order not found: " + orderId);
+                    return new ResourceNotFoundException("Order not found with id: " + orderId);
                 });
 
         // Explicitly load line items via repository to avoid lazy-loading issues
@@ -293,17 +312,22 @@ public class OrderService {
         // itemMapper.getItem() and itemMapper.getInventoryQuantity() were called.
         // In the microservice, this data comes from Catalog Service REST API.
         // Uses CatalogServiceClient.getItem(String) for cross-service enrichment.
-        for (LineItem lineItem : lineItems) {
-            try {
-                catalogServiceClient.getItem(lineItem.getItemId()).ifPresent(itemData ->
-                        log.debug("Line item {} enriched: catalog data available for itemId={}",
-                                lineItem.getLineNum(), lineItem.getItemId()));
-            } catch (Exception e) {
-                // Graceful degradation per AAP Section 0.7.4: when Catalog Service is
-                // unavailable, the order is still returned with line item data but without
-                // catalog enrichment. A warning is logged for operational visibility.
-                log.warn("Failed to enrich line item {} (itemId={}) with catalog data: {}",
-                        lineItem.getLineNum(), lineItem.getItemId(), e.getMessage());
+        // PERFORMANCE: Guard with isDebugEnabled() to avoid N cross-service REST calls
+        // when debug logging is disabled. Each call adds network latency and is only
+        // useful for diagnostic purposes — the order data is complete without enrichment.
+        if (log.isDebugEnabled()) {
+            for (LineItem lineItem : lineItems) {
+                try {
+                    catalogServiceClient.getItem(lineItem.getItemId()).ifPresent(itemData ->
+                            log.debug("Line item {} enriched: catalog data available for itemId={}",
+                                    lineItem.getLineNum(), lineItem.getItemId()));
+                } catch (Exception e) {
+                    // Graceful degradation per AAP Section 0.7.4: when Catalog Service is
+                    // unavailable, the order is still returned with line item data but without
+                    // catalog enrichment. A warning is logged for operational visibility.
+                    log.warn("Failed to enrich line item {} (itemId={}) with catalog data: {}",
+                            lineItem.getLineNum(), lineItem.getItemId(), e.getMessage());
+                }
             }
         }
 
@@ -315,15 +339,22 @@ public class OrderService {
     }
 
     /**
-     * Retrieves all orders for a given username, ordered by date descending.
+     * Retrieves orders for a given username, ordered by date descending, with a
+     * sensible default limit to prevent excessively large result sets.
      *
      * <p>Replaces the monolith's {@code OrderService.getOrdersByUsername(String)}
      * (lines 109-111) which delegated to {@code orderMapper.getOrdersByUsername()}.
      * The repository method {@code findByUsernameOrderByOrderDateDesc()} preserves
      * the monolith's ORDER BY ORDERDATE descending sort order.</p>
      *
+     * <p>A default limit of {@value #DEFAULT_ORDER_LIST_LIMIT} orders is applied to
+     * prevent unbounded result sets. A user with many orders would only receive the
+     * most recent orders. This is a safety measure — the monolith's typical usage
+     * pattern involves small order counts per user (pet store context).</p>
+     *
      * @param username the username to query orders for
-     * @return a list of {@link OrderDTO}s, ordered by date descending (may be empty)
+     * @return a list of {@link OrderDTO}s, ordered by date descending, limited to
+     *         {@value #DEFAULT_ORDER_LIST_LIMIT} entries (may be empty)
      */
     @Transactional(readOnly = true)
     public List<OrderDTO> getOrdersByUsername(String username) {
@@ -331,10 +362,17 @@ public class OrderService {
 
         List<Order> orders = orderRepository.findByUsernameOrderByOrderDateDesc(username);
 
+        // Apply a sensible default limit to prevent large result sets.
+        // Stream.limit() returns at most DEFAULT_ORDER_LIST_LIMIT elements.
         List<OrderDTO> result = orders.stream()
+                .limit(DEFAULT_ORDER_LIST_LIMIT)
                 .map(this::convertToDTO)
                 .collect(Collectors.toList());
 
+        if (orders.size() > DEFAULT_ORDER_LIST_LIMIT) {
+            log.info("Order list truncated for user '{}': {} total orders, returning {}",
+                    username, orders.size(), DEFAULT_ORDER_LIST_LIMIT);
+        }
         log.debug("Found {} orders for user: {}", result.size(), username);
         return result;
     }

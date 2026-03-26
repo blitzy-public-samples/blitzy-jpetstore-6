@@ -157,10 +157,31 @@
       <scope>test</scope>
     </dependency>
 
+    <!-- WireMock standalone for HTTP service simulation in integration tests.
+         Used by OrderSagaIT to simulate Catalog Service and Account Service
+         responses during distributed transaction failure scenarios (AAP §0.7.1). -->
+    <dependency>
+      <groupId>org.wiremock</groupId>
+      <artifactId>wiremock-standalone</artifactId>
+      <version>3.3.1</version>
+      <scope>test</scope>
+    </dependency>
+
   </dependencies>
 
   <build>
     <plugins>
+      <!-- Surefire — unit tests only; exclude *IT integration tests (run by failsafe) -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <excludes>
+            <exclude>**/*IT.java</exclude>
+          </excludes>
+          <excludedGroups>integration</excludedGroups>
+        </configuration>
+      </plugin>
       <!-- Spring Boot Maven Plugin — builds executable JAR with embedded Tomcat
            Inherited plugin version from parent's pluginManagement (3.5.12) -->
       <plugin>

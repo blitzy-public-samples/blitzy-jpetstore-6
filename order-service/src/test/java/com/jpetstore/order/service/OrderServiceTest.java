@@ -343,6 +343,65 @@ class OrderServiceTest {
         verify(cartStateService, never()).clearCart(anyString());
     }
 
+    /**
+     * Verifies that the cart is NOT cleared when the Saga orchestrator returns
+     * an Order with status "FAILED" (realistic failure path).
+     *
+     * <p>This test covers the realistic saga failure mode where
+     * {@link OrderSagaOrchestrator#executeOrderSaga(Order)} catches internal
+     * failures (e.g., insufficient inventory during
+     * {@code executeStepReserveInventory()}), sets the order status to FAILED via
+     * {@code handleSagaCompensation()}, and returns the order WITHOUT throwing an
+     * exception. This is different from the exception path tested by
+     * {@link #shouldNotClearCartWhenSagaFails()} above.</p>
+     *
+     * <p>In the monolith, the cart is only cleared after a successful
+     * {@code insertOrder()} call within a single ACID transaction. If inventory
+     * decrement fails, the entire transaction rolls back and the cart is
+     * preserved. The microservice must replicate this behavior by checking the
+     * returned order's status before clearing the cart — per AAP §0.8.1 zero
+     * business logic change rule.</p>
+     *
+     * <p>Bug reference: Prior to the fix, {@code OrderService.insertOrder()} at
+     * line 240 called {@code cartStateService.clearCart()} unconditionally after
+     * the saga returned, causing the cart to be wiped even when the order was
+     * FAILED due to insufficient inventory. This data-loss scenario is now
+     * prevented by the conditional check on order status.</p>
+     */
+    @Test
+    void shouldNotClearCartWhenSagaReturnsFailed() {
+        // Setup: Valid request and cart, but saga returns FAILED order (no exception thrown)
+        OrderRequest request = createOrderRequest("testuser", "session123");
+
+        CartDTO cart = createCartDTO("session123",
+                createCartItemDTO("EST-1", 1, new BigDecimal("16.50")));
+
+        when(accountServiceClient.accountExists("testuser")).thenReturn(true);
+        when(cartStateService.getCart("session123")).thenReturn(cart);
+
+        // The saga catches the internal failure and returns the order with FAILED status
+        // instead of throwing an exception — this is the realistic failure mode.
+        Order failedOrder = createConfirmedOrder(1001, "testuser",
+                new BigDecimal("16.50"), "FAILED");
+        when(orderSagaOrchestrator.executeOrderSaga(any(Order.class)))
+                .thenReturn(failedOrder);
+
+        // Execute: insertOrder should complete without throwing
+        OrderDTO result = orderService.insertOrder(request);
+
+        // Verify: The returned DTO reflects the FAILED status
+        assertThat(result).isNotNull();
+        assertThat(result.getStatus()).isEqualTo("FAILED");
+        assertThat(result.getOrderId()).isEqualTo(1001);
+
+        // CRITICAL ASSERTION: Cart was NOT cleared — user's cart preserved for retry.
+        // This is the core fix for the cart-clear-on-saga-failure bug.
+        verify(cartStateService, never()).clearCart(anyString());
+
+        // Verify: Saga was still invoked correctly
+        verify(orderSagaOrchestrator).executeOrderSaga(any(Order.class));
+    }
+
     // =======================================================================
     // getOrder() Tests — 3 Methods
     // =======================================================================
@@ -413,8 +472,6 @@ class OrderServiceTest {
         when(orderRepository.findById(1)).thenReturn(Optional.of(order));
         when(lineItemRepository.findByOrderId(1)).thenReturn(lineItems);
         when(orderStatusRepository.findByOrderId(1)).thenReturn(Collections.emptyList());
-        // Catalog enrichment returns empty — graceful degradation when Catalog Service unavailable
-        when(catalogServiceClient.getItem("EST-1")).thenReturn(Optional.empty());
 
         // Execute
         OrderDTO result = orderService.getOrder(1);
@@ -435,21 +492,22 @@ class OrderServiceTest {
     }
 
     /**
-     * Verifies that getOrder throws {@link RuntimeException} when the order ID
-     * does not exist in the repository.
+     * Verifies that getOrder throws {@link com.jpetstore.order.exception.ResourceNotFoundException}
+     * when the order ID does not exist in the repository.
      *
-     * <p>In the microservice, missing orders result in an explicit exception
-     * rather than returning null — providing consistent error handling
-     * for REST API error responses.</p>
+     * <p>In the microservice, missing orders result in a {@code ResourceNotFoundException}
+     * which is caught by {@code OrderController}'s {@code @ExceptionHandler} and
+     * converted to a 404 Not Found HTTP response — providing consistent error handling
+     * for REST API clients.</p>
      */
     @Test
     void shouldThrowExceptionWhenOrderNotFound() {
         // Setup: No order found for ID 999
         when(orderRepository.findById(999)).thenReturn(Optional.empty());
 
-        // Execute and verify: RuntimeException with descriptive message
+        // Execute and verify: ResourceNotFoundException with descriptive message
         assertThatThrownBy(() -> orderService.getOrder(999))
-                .isInstanceOf(RuntimeException.class)
+                .isInstanceOf(com.jpetstore.order.exception.ResourceNotFoundException.class)
                 .hasMessageContaining("Order not found");
     }
 
