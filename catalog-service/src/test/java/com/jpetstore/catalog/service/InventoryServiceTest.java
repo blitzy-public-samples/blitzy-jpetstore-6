@@ -192,7 +192,11 @@ class InventoryServiceTest {
         int quantity = 2;
         String orderId = "ORD-004";
 
-        // when
+        // when — mock a valid reservation so the code passes the reservation check
+        // and reaches the inventory existence check where IllegalStateException is thrown
+        InventoryReservation reservation = new InventoryReservation(orderId, itemId, quantity);
+        when(reservationRepository.findByOrderIdAndItemId(orderId, itemId))
+                .thenReturn(Optional.of(reservation));
         when(inventoryRepository.findById(itemId)).thenReturn(Optional.empty());
 
         // then

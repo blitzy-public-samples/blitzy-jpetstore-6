@@ -34,6 +34,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
 
 import com.jpetstore.account.dto.AccountDTO;
 import com.jpetstore.account.dto.SignonRequest;
@@ -159,7 +160,7 @@ public class AccountController {
         // Reset failure counter on successful authentication
         loginAttemptService.resetAttempts(request.getUsername());
 
-        AccountDTO account = accountOpt.get();
+        AccountDTO account = accountOpt.orElseThrow();
         String token = jwtTokenProvider.generateToken(account.getUsername());
         SignonResponse response = new SignonResponse(token, account.getUsername(), account.getEmail());
 
@@ -301,7 +302,7 @@ public class AccountController {
                     .body("Account not found: " + username);
         }
 
-        return ResponseEntity.ok(account.get());
+        return ResponseEntity.ok(account.orElseThrow());
     }
 
     /**
@@ -325,9 +326,20 @@ public class AccountController {
      */
     private String resolveAuthenticatedUser(String headerUsername) {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth != null && auth.getPrincipal() instanceof String principal
-                && !principal.isBlank()) {
-            return principal;
+        if (auth != null) {
+            Object principal = auth.getPrincipal();
+            // Support String principals (set by the JWT filter in production)
+            if (principal instanceof String str && !str.isBlank()) {
+                return str;
+            }
+            // Support UserDetails principals (set by Spring Security's @WithMockUser in tests,
+            // and by DaoAuthenticationProvider or similar authentication managers)
+            if (principal instanceof UserDetails userDetails) {
+                String username = userDetails.getUsername();
+                if (username != null && !username.isBlank()) {
+                    return username;
+                }
+            }
         }
         return headerUsername;
     }

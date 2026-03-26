@@ -291,7 +291,7 @@ class OrderServiceIntegrationIT {
 
         // Assert: order exists and auto-generated ID is positive
         assertThat(retrieved).isPresent();
-        Order foundOrder = retrieved.get();
+        Order foundOrder = retrieved.orElseThrow();
         assertThat(foundOrder.getOrderId()).isGreaterThan(0);
 
         // Assert: all order fields match
@@ -630,7 +630,7 @@ class OrderServiceIntegrationIT {
 
         // Assert: all fields correctly mapped via snake_case columns
         assertThat(retrieved).isPresent();
-        Order found = retrieved.get();
+        Order found = retrieved.orElseThrow();
 
         // Shipping address
         assertThat(found.getShipAddress1()).isEqualTo("123 Ship Street");

@@ -220,7 +220,7 @@ public class InventoryService {
 
             // Remove the reservation record so that a future retry of the same order
             // does not find a stale reservation and skip the decrement.
-            InventoryReservation reservation = reservationOpt.get();
+            InventoryReservation reservation = reservationOpt.orElseThrow();
             reservationRepository.delete(reservation);
             log.info("Removed reservation record for order {} item {} during compensation",
                     orderId, itemId);

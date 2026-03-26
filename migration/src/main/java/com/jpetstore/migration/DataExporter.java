@@ -2,13 +2,13 @@ package com.jpetstore.migration;
 
 import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileWriter;
+
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
+
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
@@ -182,7 +182,7 @@ public class DataExporter {
 
         // Ensure the output directory exists
         try {
-            Files.createDirectories(Paths.get(outputDir));
+            Files.createDirectories(Path.of(outputDir));
         } catch (IOException e) {
             System.err.println("ERROR: Failed to create output directory: " + outputDir + " — " + e.getMessage());
             // If we cannot create the output directory, every table will fail
@@ -296,14 +296,14 @@ public class DataExporter {
      * @throws IOException  if the CSV file cannot be written
      */
     public int exportTable(Connection conn, String tableName) throws SQLException, IOException {
-        String csvFilePath = Paths.get(outputDir, tableName + ".csv").toString();
+        String csvFilePath = Path.of(outputDir, tableName + ".csv").toString();
         System.out.println("Exporting table " + tableName + " to " + csvFilePath + "...");
 
         int rowCount = 0;
 
         try (Statement stmt = conn.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
              ResultSet rs = stmt.executeQuery("SELECT * FROM " + tableName);
-             BufferedWriter bw = new BufferedWriter(new FileWriter(csvFilePath));
+             BufferedWriter bw = Files.newBufferedWriter(Path.of(csvFilePath));
              PrintWriter writer = new PrintWriter(bw)) {
 
             ResultSetMetaData meta = rs.getMetaData();
@@ -568,9 +568,9 @@ public class DataExporter {
      * @throws IOException if the manifest file cannot be written
      */
     private void writeExportManifest(Map<String, Integer> tableCounts, String timestamp) throws IOException {
-        Path manifestPath = Paths.get(outputDir, "export-manifest.properties");
+        Path manifestPath = Path.of(outputDir, "export-manifest.properties");
 
-        try (BufferedWriter bw = new BufferedWriter(new FileWriter(manifestPath.toFile()));
+        try (BufferedWriter bw = Files.newBufferedWriter(manifestPath);
              PrintWriter writer = new PrintWriter(bw)) {
 
             writer.println("# Export Manifest — JPetStore HSQLDB Data Export");

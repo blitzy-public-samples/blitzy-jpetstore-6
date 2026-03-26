@@ -30,6 +30,9 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.security.crypto.password.PasswordEncoder;
+
 import com.jpetstore.account.dto.AccountDTO;
 import com.jpetstore.account.entity.Account;
 import com.jpetstore.account.entity.BannerData;
@@ -94,6 +97,12 @@ class AccountServiceTest {
     @Mock
     private BannerDataRepository bannerDataRepository;
 
+    @Mock
+    private PasswordEncoder passwordEncoder;
+
+    @Mock
+    private StringRedisTemplate redisTemplate;
+
     @InjectMocks
     private AccountService accountService;
 
@@ -141,7 +150,7 @@ class AccountServiceTest {
 
         // then
         assertThat(result).isPresent();
-        AccountDTO dto = result.get();
+        AccountDTO dto = result.orElseThrow();
         assertThat(dto.getUsername()).isEqualTo(username);
         assertThat(dto.getEmail()).isEqualTo("bar@example.com");
         assertThat(dto.getFirstName()).isEqualTo("John");
@@ -188,10 +197,11 @@ class AccountServiceTest {
         // given
         String username = "bar";
         String password = "foo";
+        String hashedPassword = "$2a$10$hashedPasswordValue";
 
         Signon signon = new Signon();
         signon.setUsername(username);
-        signon.setPassword(password);
+        signon.setPassword(hashedPassword);
 
         Account account = new Account();
         account.setUserid(username);
@@ -204,8 +214,9 @@ class AccountServiceTest {
         profile.setLangpref("english");
         profile.setFavcategory("DOGS");
 
-        when(signonRepository.findByUsernameAndPassword(username, password))
-                .thenReturn(Optional.of(signon));
+        // Service uses findById(username) then passwordEncoder.matches() — NOT findByUsernameAndPassword
+        when(signonRepository.findById(username)).thenReturn(Optional.of(signon));
+        when(passwordEncoder.matches(password, hashedPassword)).thenReturn(true);
         when(accountRepository.findById(username)).thenReturn(Optional.of(account));
         when(profileRepository.findById(username)).thenReturn(Optional.of(profile));
         when(bannerDataRepository.findById("DOGS")).thenReturn(Optional.empty());
@@ -215,8 +226,9 @@ class AccountServiceTest {
 
         // then
         assertThat(result).isPresent();
-        assertThat(result.get().getUsername()).isEqualTo(username);
-        verify(signonRepository).findByUsernameAndPassword(username, password);
+        assertThat(result.orElseThrow().getUsername()).isEqualTo(username);
+        verify(signonRepository).findById(username);
+        verify(passwordEncoder).matches(password, hashedPassword);
         verify(accountRepository).findById(username);
     }
 
@@ -229,15 +241,24 @@ class AccountServiceTest {
         // given
         String username = "bar";
         String password = "wrong";
-        when(signonRepository.findByUsernameAndPassword(username, password))
-                .thenReturn(Optional.empty());
+        String hashedPassword = "$2a$10$hashedPasswordValue";
+
+        Signon signon = new Signon();
+        signon.setUsername(username);
+        signon.setPassword(hashedPassword);
+
+        // Service calls findById(username) then passwordEncoder.matches()
+        // Return a signon but fail the password match to test invalid credentials path
+        when(signonRepository.findById(username)).thenReturn(Optional.of(signon));
+        when(passwordEncoder.matches(password, hashedPassword)).thenReturn(false);
 
         // when
         Optional<AccountDTO> result = accountService.getAccountForAuth(username, password);
 
         // then
         assertThat(result).isEmpty();
-        verify(signonRepository).findByUsernameAndPassword(username, password);
+        verify(signonRepository).findById(username);
+        verify(passwordEncoder).matches(password, hashedPassword);
         verify(accountRepository, never()).findById(any());
     }
 
@@ -290,6 +311,9 @@ class AccountServiceTest {
         readbackProfile.setMylistopt(true);
         readbackProfile.setBanneropt(false);
 
+        // Mock passwordEncoder.encode for the signon password hashing
+        when(passwordEncoder.encode("secret")).thenReturn("$2a$10$encodedSecret");
+
         when(accountRepository.findById("newuser")).thenReturn(Optional.of(readbackAccount));
         when(profileRepository.findById("newuser")).thenReturn(Optional.of(readbackProfile));
         when(bannerDataRepository.findById("CATS")).thenReturn(Optional.empty());
@@ -329,12 +353,13 @@ class AccountServiceTest {
         assertThat(savedProfile.isMylistopt()).isTrue();
         assertThat(savedProfile.isBanneropt()).isFalse();
 
-        // Verify Signon entity saved with correct field mapping
+        // Verify Signon entity saved with BCrypt-encoded password
         ArgumentCaptor<Signon> signonCaptor = ArgumentCaptor.forClass(Signon.class);
         verify(signonRepository).save(signonCaptor.capture());
         Signon savedSignon = signonCaptor.getValue();
         assertThat(savedSignon.getUsername()).isEqualTo("newuser");
-        assertThat(savedSignon.getPassword()).isEqualTo("secret");
+        assertThat(savedSignon.getPassword()).isEqualTo("$2a$10$encodedSecret");
+        verify(passwordEncoder).encode("secret");
     }
 
     // -----------------------------------------------------------------------
@@ -375,6 +400,9 @@ class AccountServiceTest {
         Signon existingSignon = new Signon();
         existingSignon.setUsername(username);
 
+        // Mock passwordEncoder.encode for the signon password update
+        when(passwordEncoder.encode("newpassword")).thenReturn("$2a$10$encodedNewPassword");
+
         when(accountRepository.findById(username)).thenReturn(Optional.of(existingAccount));
         when(profileRepository.findById(username)).thenReturn(Optional.of(existingProfile));
         when(signonRepository.findById(username)).thenReturn(Optional.of(existingSignon));
@@ -398,10 +426,11 @@ class AccountServiceTest {
         assertThat(existingProfile.isMylistopt()).isFalse();
         assertThat(existingProfile.isBanneropt()).isTrue();
 
-        // Password is non-null and non-empty → signon SHOULD be updated
+        // Password is non-null and non-empty → signon SHOULD be updated with BCrypt-encoded password
         verify(signonRepository).findById(username);
         verify(signonRepository).save(existingSignon);
-        assertThat(existingSignon.getPassword()).isEqualTo("newpassword");
+        assertThat(existingSignon.getPassword()).isEqualTo("$2a$10$encodedNewPassword");
+        verify(passwordEncoder).encode("newpassword");
     }
 
     // -----------------------------------------------------------------------

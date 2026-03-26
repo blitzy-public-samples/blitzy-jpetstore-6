@@ -115,7 +115,7 @@ class CatalogServiceClientTest {
 
         // Assert: Result is present and contains expected item data
         assertThat(result).isPresent();
-        Map<String, Object> itemData = result.get();
+        Map<String, Object> itemData = result.orElseThrow();
         assertThat(itemData.get("itemId")).isEqualTo("EST-1");
         assertThat(itemData.get("listPrice")).isNotNull();
         assertThat(itemData.get("productId")).isEqualTo("FI-SW-01");

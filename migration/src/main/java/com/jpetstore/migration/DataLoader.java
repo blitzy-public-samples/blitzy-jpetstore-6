@@ -1,8 +1,6 @@
 package com.jpetstore.migration;
 
 import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileReader;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -221,7 +219,7 @@ public class DataLoader {
                 conn.setAutoCommit(false);
 
                 for (String tableName : tables) {
-                    String csvPath = exportDir + File.separator + tableName + ".csv";
+                    String csvPath = java.nio.file.Path.of(exportDir, tableName + ".csv").toString();
                     System.out.println("Loading table " + tableName + " into " + dbName + "...");
 
                     try {
@@ -301,8 +299,8 @@ public class DataLoader {
     public int[] loadTable(Connection conn, String tableName, String exportFilePath)
             throws SQLException, IOException {
 
-        File csvFile = new File(exportFilePath);
-        if (!csvFile.exists()) {
+        java.nio.file.Path csvPath = java.nio.file.Path.of(exportFilePath);
+        if (!java.nio.file.Files.exists(csvPath)) {
             throw new IOException("CSV file not found: " + exportFilePath);
         }
 
@@ -322,7 +320,7 @@ public class DataLoader {
         int rowsInserted = 0;
         int rowsSkipped = 0;
 
-        try (BufferedReader reader = new BufferedReader(new FileReader(csvFile))) {
+        try (BufferedReader reader = java.nio.file.Files.newBufferedReader(csvPath)) {
             // Read the header row containing HSQLDB UPPERCASE column names
             String headerLine = reader.readLine();
             if (headerLine == null || headerLine.isBlank()) {

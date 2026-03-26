@@ -453,17 +453,20 @@ class InventoryServiceIT {
         }
 
         /**
-         * Verifies that restoring inventory for a nonexistent item throws
-         * an {@link IllegalStateException}. This guards against calling
-         * compensation on items that were never in the inventory table.
+         * Verifies that restoring inventory for a nonexistent reservation throws
+         * an {@link IllegalArgumentException}. The service checks for a matching
+         * reservation record before attempting to restore inventory quantities.
+         * When no reservation exists for the given orderId and itemId, the service
+         * rejects the restore to prevent inventory inflation from spurious
+         * compensation calls.
          */
         @Test
-        @DisplayName("should throw IllegalStateException when restoring nonexistent item")
+        @DisplayName("should throw IllegalArgumentException when restoring nonexistent item")
         void shouldThrowWhenRestoringNonexistentItem() {
             assertThatThrownBy(() ->
                     inventoryService.restoreInventory("NONEXISTENT", 5, "order-999"))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("Inventory record not found");
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("No matching inventory reservation found");
         }
     }
 

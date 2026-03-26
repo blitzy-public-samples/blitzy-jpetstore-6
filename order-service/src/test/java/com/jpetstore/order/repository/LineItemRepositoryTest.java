@@ -268,7 +268,7 @@ class LineItemRepositoryTest {
         assertThat(result).isPresent();
         assertThat(result.isPresent()).isTrue();
 
-        LineItem found = result.get();
+        LineItem found = result.orElseThrow();
         assertThat(found.getOrderId()).isEqualTo(orderId);
         assertThat(found.getLineNum()).isEqualTo(1);
         assertThat(found.getItemId()).isEqualTo("EST-1");
@@ -381,16 +381,16 @@ class LineItemRepositoryTest {
         assertThat(result1).isPresent();
         assertThat(result2).isPresent();
 
-        assertThat(result1.get().getLineNum()).isEqualTo(1);
-        assertThat(result1.get().getItemId()).isEqualTo("EST-1");
-        assertThat(result1.get().getQuantity()).isEqualTo(4);
+        assertThat(result1.orElseThrow().getLineNum()).isEqualTo(1);
+        assertThat(result1.orElseThrow().getItemId()).isEqualTo("EST-1");
+        assertThat(result1.orElseThrow().getQuantity()).isEqualTo(4);
 
-        assertThat(result2.get().getLineNum()).isEqualTo(2);
-        assertThat(result2.get().getItemId()).isEqualTo("EST-2");
-        assertThat(result2.get().getQuantity()).isEqualTo(3);
+        assertThat(result2.orElseThrow().getLineNum()).isEqualTo(2);
+        assertThat(result2.orElseThrow().getItemId()).isEqualTo("EST-2");
+        assertThat(result2.orElseThrow().getQuantity()).isEqualTo(3);
 
         // Verify they are truly different entities
-        assertThat(result1.get().getItemId()).isNotEqualTo(result2.get().getItemId());
+        assertThat(result1.orElseThrow().getItemId()).isNotEqualTo(result2.orElseThrow().getItemId());
     }
 
     // -----------------------------------------------------------------------
@@ -486,10 +486,10 @@ class LineItemRepositoryTest {
 
         // Assert: Exact BigDecimal comparison for decimal(10,2)
         assertThat(result1).isPresent();
-        assertThat(result1.get().getUnitPrice()).isEqualTo(new BigDecimal("100.00"));
+        assertThat(result1.orElseThrow().getUnitPrice()).isEqualTo(new BigDecimal("100.00"));
 
         assertThat(result2).isPresent();
-        assertThat(result2.get().getUnitPrice()).isEqualTo(new BigDecimal("99.99"));
+        assertThat(result2.orElseThrow().getUnitPrice()).isEqualTo(new BigDecimal("99.99"));
     }
 
     // -----------------------------------------------------------------------
@@ -531,7 +531,7 @@ class LineItemRepositoryTest {
         Optional<LineItem> result = lineItemRepository.findById(
             new LineItem.LineItemId(orderId, 1));
         assertThat(result).isPresent();
-        assertThat(result.get().getItemId()).isEqualTo("ZZZ-99999");
+        assertThat(result.orElseThrow().getItemId()).isEqualTo("ZZZ-99999");
     }
 
     // -----------------------------------------------------------------------

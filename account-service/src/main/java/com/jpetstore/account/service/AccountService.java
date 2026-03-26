@@ -231,7 +231,7 @@ public class AccountService {
         }
 
         // Step 2: Verify plaintext password against stored BCrypt hash
-        Signon signon = signonOpt.get();
+        Signon signon = signonOpt.orElseThrow();
         if (!passwordEncoder.matches(password, signon.getPassword())) {
             log.debug("Authentication failed — invalid password for username: {}", username);
             return Optional.empty(); // Invalid credentials — mirrors monolith: returns null on auth failure

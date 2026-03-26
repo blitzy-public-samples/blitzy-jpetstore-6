@@ -34,6 +34,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.http.HttpCookie;
 import org.springframework.http.HttpHeaders;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
@@ -110,6 +111,12 @@ class AuthenticationFilterTest {
     @Mock
     private WebFilterChain filterChain;
 
+    @Mock
+    private ReactiveRedisTemplate<String, String> reactiveRedisTemplate;
+
+    @Mock
+    private org.springframework.data.redis.core.ReactiveValueOperations<String, String> reactiveValueOperations;
+
     /**
      * The AuthenticationFilter instance under test, constructed directly with
      * the test JWT secret and issuer values (constructor injection, not @Value).
@@ -123,12 +130,20 @@ class AuthenticationFilterTest {
     /**
      * Initializes the AuthenticationFilter with test configuration and configures
      * the mock filter chain to return {@code Mono.empty()} for any exchange.
+     * Also stubs the ReactiveRedisTemplate to return mock value operations that
+     * return empty Mono for any key lookup (default: no token revocation).
      */
     @BeforeEach
     void setUp() {
+        // Stub RedisTemplate.opsForValue() to return mock value operations (lenient
+        // because not all tests exercise the token-revocation code path through Redis)
+        org.mockito.Mockito.lenient().when(reactiveRedisTemplate.opsForValue()).thenReturn(reactiveValueOperations);
+        // Default: no revocation entries in Redis (key not found → token not revoked)
+        org.mockito.Mockito.lenient().when(reactiveValueOperations.get(any(String.class))).thenReturn(reactor.core.publisher.Mono.empty());
+
         // Construct the filter directly — it uses constructor injection
-        // (not @Value fields), taking jwtSecret and jwtIssuer as parameters
-        authenticationFilter = new AuthenticationFilter(JWT_SECRET, JWT_ISSUER);
+        // (not @Value fields), taking jwtSecret, jwtIssuer, and reactiveRedisTemplate as parameters
+        authenticationFilter = new AuthenticationFilter(JWT_SECRET, JWT_ISSUER, reactiveRedisTemplate);
 
         // Configure mock chain to simulate successful downstream processing
         when(filterChain.filter(any(ServerWebExchange.class))).thenReturn(Mono.empty());

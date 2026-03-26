@@ -133,8 +133,8 @@ class AccountServiceClientTest {
 
         // Assert: result is present and contains expected account data
         assertThat(result).isPresent();
-        assertThat(result.get().get("username")).isEqualTo("j2ee");
-        assertThat(result.get().get("email")).isEqualTo("j2ee@test.com");
+        assertThat(result.orElseThrow().get("username")).isEqualTo("j2ee");
+        assertThat(result.orElseThrow().get("email")).isEqualTo("j2ee@test.com");
 
         // Verify: expected request was made
         mockServer.verify();

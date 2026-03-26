@@ -31,7 +31,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.api.AfterAll;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -42,8 +42,8 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
-import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
 import com.jpetstore.order.client.AccountServiceClient;
 import com.jpetstore.order.entity.LineItem;
 import com.jpetstore.order.entity.Order;
@@ -110,14 +110,36 @@ class OrderSagaIT {
     // =========================================================================
 
     /**
-     * WireMock extension simulating the Catalog Service REST API.
-     * Runs on a dynamic port, registered as a JUnit 5 extension that starts
-     * before the Spring context loads (so @DynamicPropertySource can read the port).
+     * WireMock server simulating the Catalog Service REST API.
+     *
+     * <p><b>Important:</b> Started in a static initializer (not via
+     * {@code @RegisterExtension}) to ensure the HTTP server is listening
+     * BEFORE Spring's {@code @DynamicPropertySource} resolves the URL.
+     * JUnit 5 processes annotated extensions ({@code @SpringBootTest}'s
+     * {@code SpringExtension}) before programmatic extensions
+     * ({@code @RegisterExtension}), so a {@code WireMockExtension} would
+     * have its {@code beforeAll()} called after the Spring context loads,
+     * leaving the HTTP port unbound during bean creation.</p>
+     *
+     * <p>A static initializer runs during class loading — before any
+     * JUnit 5 extension lifecycle callback — guaranteeing the server is
+     * listening when {@code @DynamicPropertySource} reads
+     * {@code wireMock.port()}.</p>
      */
-    @RegisterExtension
-    static WireMockExtension wireMock = WireMockExtension.newInstance()
-            .options(WireMockConfiguration.wireMockConfig().dynamicPort())
-            .build();
+    private static final WireMockServer wireMock;
+
+    static {
+        wireMock = new WireMockServer(
+                WireMockConfiguration.wireMockConfig().dynamicPort());
+        wireMock.start();
+    }
+
+    @AfterAll
+    static void stopWireMock() {
+        if (wireMock != null && wireMock.isRunning()) {
+            wireMock.stop();
+        }
+    }
 
     // =========================================================================
     // Dynamic Properties: Point services at test infrastructure
@@ -132,11 +154,30 @@ class OrderSagaIT {
         registry.add("spring.jpa.hibernate.ddl-auto", () -> "create-drop");
         registry.add("spring.liquibase.enabled", () -> "false");
 
-        // Point CatalogServiceClient at WireMock
-        registry.add("services.catalog-service.url", wireMock::baseUrl);
+        // Point CatalogServiceClient at WireMock — use explicit IPv4 127.0.0.1 instead
+        // of wireMock.baseUrl() (which returns "http://localhost:PORT"). In this container
+        // environment, getent resolves "localhost" to ::1 (IPv6) first, but WireMock's
+        // Jetty binds to 0.0.0.0 (IPv4 only), causing "Connection refused" when the
+        // RestClient connects to the IPv6 address. Using 127.0.0.1 forces IPv4.
+        registry.add("services.catalog-service.url",
+                () -> "http://127.0.0.1:" + wireMock.port());
 
         // Account service URL (not used by saga, but required for AppConfig bean)
-        registry.add("services.account-service.url", () -> "http://localhost:19999");
+        registry.add("services.account-service.url", () -> "http://127.0.0.1:19999");
+
+        // Disable Redis health indicator — @MockBean RedisConnectionFactory does not
+        // satisfy the Actuator's ReactiveHealthContributor auto-configuration, causing
+        // 'beans' must not be empty error in redisHealthContributor factory method
+        registry.add("management.health.redis.enabled", () -> "false");
+
+        // Exclude reactive Redis auto-configuration — the test provides a non-reactive
+        // @MockBean RedisConnectionFactory but RedisReactiveAutoConfiguration requires
+        // ReactiveRedisConnectionFactory which is not mocked
+        registry.add("spring.autoconfigure.exclude",
+                () -> "org.springframework.boot.autoconfigure.data.redis.RedisReactiveAutoConfiguration");
+
+        // JWT secret required by AppConfig @Value("${jwt.secret}")
+        registry.add("jwt.secret", () -> "test-secret-key-for-saga-integration-tests-minimum-256-bits-long");
     }
 
     // =========================================================================

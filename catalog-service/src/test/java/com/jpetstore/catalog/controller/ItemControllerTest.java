@@ -42,6 +42,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -273,6 +274,7 @@ class ItemControllerTest {
      * "Step 2: POST catalog-service/items/{id}/inventory/decrement for each line item"
      */
     @Test
+    @WithMockUser(username = "order-service", roles = "SERVICE")
     void shouldDecrementInventorySuccessfully() throws Exception {
         // Arrange — orderId serves as the Saga idempotency key
         when(inventoryService.decrementInventory(eq("EST-1"), eq(2), eq("order-123")))
@@ -303,6 +305,7 @@ class ItemControllerTest {
      * <p>Per AAP Section 0.7.1: "Reservation fails (insufficient stock)" → "409 Conflict"
      */
     @Test
+    @WithMockUser(username = "order-service", roles = "SERVICE")
     void shouldReturn409WhenInsufficientStock() throws Exception {
         // Arrange
         when(inventoryService.decrementInventory("EST-1", 99999, "order-456"))
@@ -333,6 +336,7 @@ class ItemControllerTest {
      * The service must NOT be called on validation failure.
      */
     @Test
+    @WithMockUser(username = "order-service", roles = "SERVICE")
     void shouldReturn400ForInvalidDecrementRequest() throws Exception {
         // Arrange — missing orderId field
         Map<String, Object> requestBody = new HashMap<>();
@@ -355,6 +359,7 @@ class ItemControllerTest {
      * monolith always decrements by the cart item quantity, which is always &ge; 1.
      */
     @Test
+    @WithMockUser(username = "order-service", roles = "SERVICE")
     void shouldReturn400ForZeroQuantityDecrement() throws Exception {
         // Arrange
         Map<String, Object> requestBody = new HashMap<>();
@@ -377,6 +382,7 @@ class ItemControllerTest {
      * inventory can never be inadvertently incremented via this endpoint.
      */
     @Test
+    @WithMockUser(username = "order-service", roles = "SERVICE")
     void shouldReturn400ForNegativeQuantityDecrement() throws Exception {
         // Arrange
         Map<String, Object> requestBody = new HashMap<>();

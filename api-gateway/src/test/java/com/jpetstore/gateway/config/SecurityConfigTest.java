@@ -86,6 +86,15 @@ class SecurityConfigTest {
     private ReactiveRedisConnectionFactory reactiveRedisConnectionFactory;
 
     /**
+     * Mock reactive Redis template to satisfy the {@link SecurityConfig}'s
+     * {@code @Autowired ReactiveRedisTemplate<String, String>} dependency.
+     * The gateway uses Redis for routing flags and token revocation checks,
+     * but security chain testing does not require actual Redis operations.
+     */
+    @MockitoBean
+    private org.springframework.data.redis.core.ReactiveRedisTemplate<String, String> reactiveRedisTemplate;
+
+    /**
      * Mock route locator to prevent Spring Cloud Gateway's route
      * auto-configuration from loading in the {@code @WebFluxTest} slice.
      * This isolates the security chain for focused testing.

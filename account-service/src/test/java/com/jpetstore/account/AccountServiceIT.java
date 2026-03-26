@@ -37,6 +37,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.junit.jupiter.api.Tag;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -76,6 +77,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
+@Tag("integration")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class AccountServiceIT {
 
@@ -435,31 +437,36 @@ class AccountServiceIT {
     // ----------------------------------------------------------------
 
     /**
-     * Validates that retrieving a non-existent user returns 404 Not Found.
+     * Validates that retrieving another user's account returns 403 Forbidden.
      *
-     * <p>Given: A username that was never registered.
-     * When: GET to /api/accounts/nonexistent.
-     * Then: HTTP 404 Not Found.</p>
+     * <p>The controller implements IDOR (Insecure Direct Object Reference) prevention:
+     * an authenticated user can only view their own account. Requesting a different
+     * username — even one that does not exist — returns 403 Forbidden rather than 404
+     * Not Found to prevent user-enumeration attacks.</p>
+     *
+     * <p>Given: An authenticated user "j2ee" with a valid JWT.
+     * When: GET to /api/accounts/nonexistent (different username).
+     * Then: HTTP 403 Forbidden (IDOR check precedes existence check).</p>
      */
     @Test
     @Order(7)
     void testGetNonExistentUser() {
         assertThat(jwtToken).as("JWT token must be available from prior tests").isNotNull();
 
-        // Given — auth headers for the GET request
+        // Given — auth headers for the GET request (token belongs to "j2ee")
         HttpHeaders headers = new HttpHeaders();
         headers.set(HttpHeaders.AUTHORIZATION, "Bearer " + jwtToken);
         HttpEntity<Void> request = new HttpEntity<>(headers);
 
-        // When — GET /api/accounts/nonexistent
+        // When — GET /api/accounts/nonexistent (a username that doesn't match the token)
         ResponseEntity<String> response = restTemplate.exchange(
                 getBaseUrl() + "/api/accounts/nonexistent",
                 HttpMethod.GET,
                 request,
                 String.class);
 
-        // Then — HTTP 404 Not Found
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        // Then — HTTP 403 Forbidden (IDOR protection: authenticated user ≠ requested user)
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
 
     // ----------------------------------------------------------------
