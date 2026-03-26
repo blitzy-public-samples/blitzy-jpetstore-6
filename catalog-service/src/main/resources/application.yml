@@ -126,6 +126,25 @@ server:
   shutdown: graceful
 
 # -----------------------------------------------------------------------------
+# JWT Configuration (Service-to-Service Authentication)
+# -----------------------------------------------------------------------------
+# The Catalog Service validates JWT tokens on protected endpoints (inventory
+# write operations) for defense-in-depth. Tokens are issued by Account Service
+# (for user tokens) and by Order Service (for service-to-service tokens during
+# Saga orchestration). All services share the same HMAC-SHA signing secret
+# to enable cross-service JWT validation.
+#
+# The secret MUST match across all services:
+#   - Account Service: jwt.secret
+#   - Order Service: jwt.secret (AppConfig.generateServiceToken())
+#   - API Gateway: jwt.secret
+#   - Catalog Service: jwt.secret (this configuration)
+# -----------------------------------------------------------------------------
+jwt:
+  secret: ${JWT_SECRET:jpetstore-shared-jwt-secret-key-change-in-production-minimum-256-bits}
+  issuer: jpetstore
+
+# -----------------------------------------------------------------------------
 # Spring Boot Actuator — Health Checks and Monitoring
 # -----------------------------------------------------------------------------
 # Exposes health and info endpoints for Docker healthchecks, API Gateway

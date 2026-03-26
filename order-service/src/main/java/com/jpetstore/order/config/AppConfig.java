@@ -213,6 +213,16 @@ public class AppConfig {
                 .baseUrl(baseUrl)
                 .defaultHeader("Content-Type", "application/json")
                 .requestFactory(createRequestFactory())
+                // Inject a service-to-service JWT on every outbound request to Catalog Service.
+                // Catalog Service's SecurityConfig requires authentication on POST /api/items/*/inventory/**
+                // (inventory decrement and restore operations used by the Saga orchestrator).
+                // This request initializer generates a fresh JWT signed with the shared secret
+                // and attaches it as a Bearer token in the Authorization header — identical to the
+                // pattern used for accountServiceRestClient above.
+                .requestInitializer(request -> {
+                    String serviceToken = generateServiceToken();
+                    request.getHeaders().set("Authorization", "Bearer " + serviceToken);
+                })
                 .build();
     }
 
@@ -279,6 +289,7 @@ public class AppConfig {
         return Jwts.builder()
                 .subject("order-service")
                 .issuer(jwtIssuer)
+                .claim("role", "SERVICE")
                 .issuedAt(now)
                 .expiration(expiryDate)
                 .signWith(signingKey)

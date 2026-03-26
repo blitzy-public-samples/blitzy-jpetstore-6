@@ -63,7 +63,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     /** HMAC-SHA secret key for JWT signature verification (shared with Account Service and Gateway). */
-    @Value("${jwt.secret:jpetstore-jwt-secret-key-for-development-only-change-in-production}")
+    @Value("${jwt.secret:jpetstore-shared-jwt-secret-key-change-in-production-minimum-256-bits}")
     private String jwtSecret;
 
     /** Expected issuer claim for JWT tokens. */
@@ -128,6 +128,15 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/items/**").permitAll()
                 // Inventory write operations require authentication
                 .requestMatchers(HttpMethod.POST, "/api/items/*/inventory/**").authenticated()
+                // Allow unauthenticated access to the Spring Boot error endpoint.
+                // When @Valid bean validation fails (e.g., MethodArgumentNotValidException),
+                // Spring Boot internally forwards the request to /error via BasicErrorController.
+                // Without this rule, the error dispatch falls under anyRequest().authenticated(),
+                // and because the SecurityContext is not propagated to the ERROR dispatch,
+                // the response becomes 401 Unauthorized instead of the correct 400 Bad Request
+                // with validation error details. This matches the pattern already implemented
+                // in Account Service's SecurityConfig.
+                .requestMatchers("/error").permitAll()
                 // All other requests require authentication
                 .anyRequest().authenticated()
             )
