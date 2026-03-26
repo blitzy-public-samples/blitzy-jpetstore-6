@@ -20,9 +20,11 @@ import com.jpetstore.gateway.filter.AuthenticationFilter;
 import java.util.Arrays;
 import java.util.List;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.server.PathContainer;
@@ -102,6 +104,10 @@ public class SecurityConfig {
     @Value("${jwt.issuer:jpetstore}")
     private String jwtIssuer;
 
+    /** Reactive Redis template for JWT token revocation checks (password-change timestamps). */
+    @Autowired
+    private ReactiveRedisTemplate<String, String> reactiveRedisTemplate;
+
     // -------------------------------------------------------------------------
     // Bean Definitions
     // -------------------------------------------------------------------------
@@ -119,7 +125,7 @@ public class SecurityConfig {
      */
     @Bean
     public AuthenticationFilter authenticationFilter() {
-        return new AuthenticationFilter(jwtSecret, jwtIssuer);
+        return new AuthenticationFilter(jwtSecret, jwtIssuer, reactiveRedisTemplate);
     }
 
     /**
@@ -283,6 +289,24 @@ public class SecurityConfig {
                 // Account Service's /api/accounts/signon endpoint.
                 .formLogin(ServerHttpSecurity.FormLoginSpec::disable)
 
+                // Configure security response headers for defense-in-depth.
+                // These headers protect against clickjacking, MIME sniffing, and
+                // help enforce a strict content security policy.
+                .headers(headers -> headers
+                        // Content-Security-Policy: restrict resource loading to same-origin
+                        // to mitigate XSS and data injection attacks.
+                        .contentSecurityPolicy(csp ->
+                                csp.policyDirectives("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'"))
+                        // Strict-Transport-Security: enforce HTTPS for 1 year with subdomains.
+                        // Active when served over HTTPS; browsers ignore this header over HTTP.
+                        .hsts(hsts -> hsts
+                                .maxAge(java.time.Duration.ofDays(365))
+                                .includeSubdomains(true))
+                        // Permissions-Policy: disable unused browser features to reduce attack surface.
+                        .permissionsPolicy(pp ->
+                                pp.policy("camera=(), microphone=(), geolocation=(), payment=()"))
+                )
+
                 .build();
     }
 
@@ -307,16 +331,29 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration corsConfig = new CorsConfiguration();
 
-        // Allow all origins during development/coexistence — tighten for production
-        corsConfig.addAllowedOriginPattern("*");
-
-        // Allow all standard HTTP methods used by the microservices REST APIs
-        corsConfig.setAllowedMethods(Arrays.asList(
-                "GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"
+        // Restrict allowed origins to trusted domains only.
+        // During the Strangler Fig coexistence, the monolith runs on port 8080 (same as
+        // the gateway in production). Additional origins can be added via environment
+        // configuration or by updating this list for specific deployment environments.
+        // SECURITY: Never use wildcard ("*") with allowCredentials(true) — the CORS
+        // specification forbids it, and it enables cross-origin credential theft from
+        // any domain.
+        corsConfig.setAllowedOrigins(Arrays.asList(
+                "http://localhost:8080",
+                "http://localhost:3000",
+                "https://jpetstore.example.com"
         ));
 
-        // Allow all headers — includes Authorization (JWT), Content-Type, and custom headers
-        corsConfig.addAllowedHeader("*");
+        // Allow only the HTTP methods actually used by the microservices REST APIs.
+        // GET, POST, PUT for CRUD; OPTIONS for preflight; HEAD for health checks.
+        corsConfig.setAllowedMethods(Arrays.asList(
+                "GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"
+        ));
+
+        // Allow standard headers needed for JWT auth and content negotiation
+        corsConfig.setAllowedHeaders(Arrays.asList(
+                "Authorization", "Content-Type", "Accept", "X-Requested-With"
+        ));
 
         // Expose response headers that clients may need to read
         corsConfig.setExposedHeaders(Arrays.asList(

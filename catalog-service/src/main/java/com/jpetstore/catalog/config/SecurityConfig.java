@@ -15,13 +15,20 @@
  */
 package com.jpetstore.catalog.config;
 
+import com.jpetstore.catalog.security.JwtAuthenticationFilter;
+
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.HttpStatusEntryPoint;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 /**
  * Spring Security configuration for the Catalog Service.
@@ -55,21 +62,45 @@ import org.springframework.security.web.SecurityFilterChain;
 @EnableWebSecurity
 public class SecurityConfig {
 
+    /** HMAC-SHA secret key for JWT signature verification (shared with Account Service and Gateway). */
+    @Value("${jwt.secret:jpetstore-jwt-secret-key-for-development-only-change-in-production}")
+    private String jwtSecret;
+
+    /** Expected issuer claim for JWT tokens. */
+    @Value("${jwt.issuer:jpetstore}")
+    private String jwtIssuer;
+
     /**
-     * Configures the security filter chain to permit all requests while
-     * maintaining Spring Security's default security header output.
+     * Creates the JWT authentication filter for defense-in-depth validation.
+     *
+     * <p>This filter validates JWT tokens directly on the Catalog Service so that
+     * even if the service port (8082) is directly accessible (bypassing the API
+     * Gateway), write operations on protected endpoints (inventory decrement/restore)
+     * are still authenticated.</p>
+     *
+     * @return the configured {@link JwtAuthenticationFilter} instance
+     */
+    @Bean
+    public JwtAuthenticationFilter jwtAuthenticationFilter() {
+        return new JwtAuthenticationFilter(jwtSecret, jwtIssuer);
+    }
+
+    /**
+     * Configures the security filter chain with defense-in-depth authentication.
+     *
+     * <p>Read-only catalog browsing endpoints (GET on categories, products, items)
+     * remain publicly accessible. Write operations on inventory (POST decrement/restore)
+     * require JWT authentication to prevent unauthorized inventory manipulation
+     * even when the service port is directly reachable.</p>
      *
      * <p>Configuration details:</p>
      * <ul>
-     *   <li><strong>CSRF disabled</strong> — Catalog Service is a stateless REST API
-     *       with no browser form submissions; CSRF protection is not applicable</li>
-     *   <li><strong>All requests permitted</strong> — Authentication is handled at
-     *       the API Gateway; the catalog service trusts internal network traffic</li>
-     *   <li><strong>Stateless sessions</strong> — No HTTP sessions are created;
-     *       the service is fully stateless per the microservices architecture</li>
-     *   <li><strong>Default security headers</strong> — Spring Security's default
-     *       header configuration is retained (not customized), providing all standard
-     *       security headers listed in the class-level Javadoc</li>
+     *   <li><strong>Public GET endpoints</strong>: All GET requests on catalog resources
+     *       are publicly accessible for browsing without authentication.</li>
+     *   <li><strong>Protected write endpoints</strong>: POST requests to inventory
+     *       decrement and restore endpoints require authentication.</li>
+     *   <li><strong>Actuator health/info</strong>: Public for orchestration probes.</li>
+     *   <li><strong>All other requests</strong>: Require authentication by default.</li>
      * </ul>
      *
      * @param http the {@link HttpSecurity} builder to configure
@@ -81,15 +112,34 @@ public class SecurityConfig {
         http
             // Disable CSRF — stateless REST API, no browser form submissions
             .csrf(csrf -> csrf.disable())
-            // Permit all requests — auth is enforced at the API Gateway layer
-            .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
+
+            // Register JWT filter before Spring Security's UsernamePasswordAuthenticationFilter
+            .addFilterBefore(jwtAuthenticationFilter(),
+                    UsernamePasswordAuthenticationFilter.class)
+
+            // Path-based authorization rules for defense-in-depth
+            .authorizeHttpRequests(auth -> auth
+                // Actuator health and info for orchestration probes
+                .requestMatchers("/actuator/health", "/actuator/health/**",
+                        "/actuator/info").permitAll()
+                // All GET requests on catalog resources are public (browsing)
+                .requestMatchers(HttpMethod.GET, "/api/categories/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/products/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/items/**").permitAll()
+                // Inventory write operations require authentication
+                .requestMatchers(HttpMethod.POST, "/api/items/*/inventory/**").authenticated()
+                // All other requests require authentication
+                .anyRequest().authenticated()
+            )
+
+            // Return 401 instead of redirect to login page for unauthorized requests
+            .exceptionHandling(ex -> ex
+                    .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
+
             // Stateless session management — no HTTP sessions created
             .sessionManagement(session ->
                 session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            // Default security headers are automatically applied by Spring Security.
-            // Using Customizer.withDefaults() explicitly retains all default headers:
-            // X-Content-Type-Options, X-Frame-Options, X-XSS-Protection,
-            // Referrer-Policy, Cache-Control, Pragma, Expires
+            // Default security headers
             .headers(Customizer.withDefaults());
 
         return http.build();

@@ -76,10 +76,10 @@
     <!-- Spring Boot 3.5.12 - latest stable 3.5.x -->
     <spring-boot.version>3.5.12</spring-boot.version>
     <!-- Spring Cloud BOM for Gateway -->
-    <spring-cloud.version>2025.0.0</spring-cloud.version>
+    <spring-cloud.version>2025.0.1</spring-cloud.version>
 
     <!-- Dependency versions -->
-    <postgresql.version>42.7.5</postgresql.version>
+    <postgresql.version>42.7.7</postgresql.version>
     <jjwt.version>0.12.6</jjwt.version>
     <testcontainers.version>1.20.4</testcontainers.version>
     <hsqldb.version>2.7.4</hsqldb.version>

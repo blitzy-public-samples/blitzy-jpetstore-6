@@ -29,9 +29,9 @@ spring:
   # bannerdata tables from the original monolith schema.
   # ---------------------------------------------------------------------------
   datasource:
-    url: jdbc:postgresql://localhost:5432/jpetstore_account
-    username: jpetstore
-    password: jpetstore
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/jpetstore_account}
+    username: ${DB_USERNAME:jpetstore}
+    password: ${DB_PASSWORD:jpetstore}
     driver-class-name: org.postgresql.Driver
     hikari:
       maximum-pool-size: 10
@@ -59,6 +59,19 @@ spring:
           time_zone: UTC
     show-sql: false
     open-in-view: false
+
+  # ---------------------------------------------------------------------------
+  # Redis Configuration
+  # ---------------------------------------------------------------------------
+  # Redis is used for storing per-user password-change timestamps to enable
+  # JWT token revocation after password changes. When a password is updated,
+  # a timestamp is written to Redis; the API Gateway checks this timestamp
+  # on every request and rejects tokens issued before the password change.
+  # ---------------------------------------------------------------------------
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:redis}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
 
   # ---------------------------------------------------------------------------
   # Liquibase Configuration
@@ -100,10 +113,12 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info
   endpoint:
     health:
       show-details: when-authorized
+    metrics:
+      enabled: false
 
 # -----------------------------------------------------------------------------
 # Logging Configuration

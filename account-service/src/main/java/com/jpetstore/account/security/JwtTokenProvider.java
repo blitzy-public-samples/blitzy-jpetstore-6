@@ -20,6 +20,8 @@ import java.util.Date;
 
 import javax.crypto.SecretKey;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -27,6 +29,7 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import jakarta.annotation.PostConstruct;
 
 /**
  * JWT Token Provider for the Account Service microservice.
@@ -73,6 +76,11 @@ import io.jsonwebtoken.security.Keys;
 @Component
 public class JwtTokenProvider {
 
+    private static final Logger log = LoggerFactory.getLogger(JwtTokenProvider.class);
+
+    /** Known default secret value — must be overridden in production via JWT_SECRET env var. */
+    private static final String DEFAULT_SECRET_PREFIX = "jpetstore-shared-jwt-secret-key";
+
     /**
      * HMAC-SHA256 secret key for signing and verifying JWT tokens.
      *
@@ -106,6 +114,33 @@ public class JwtTokenProvider {
      */
     @Value("${jwt.issuer:jpetstore}")
     private String jwtIssuer;
+
+    /**
+     * Validates the JWT secret on startup. Logs a severe warning if the default
+     * predictable secret is in use, prompting operators to set the JWT_SECRET
+     * environment variable before production deployment.
+     *
+     * <p>The application still starts to avoid blocking development and testing,
+     * but the warning is impossible to miss in the startup log output.</p>
+     */
+    @PostConstruct
+    void validateJwtSecret() {
+        if (jwtSecret == null || jwtSecret.isBlank()) {
+            throw new IllegalStateException(
+                    "JWT secret is not configured. Set the JWT_SECRET environment variable.");
+        }
+        if (jwtSecret.startsWith(DEFAULT_SECRET_PREFIX)) {
+            log.error("╔══════════════════════════════════════════════════════════════╗");
+            log.error("║  SECURITY WARNING: Using default JWT secret!                ║");
+            log.error("║  Set JWT_SECRET environment variable before production use.  ║");
+            log.error("╚══════════════════════════════════════════════════════════════╝");
+        }
+        if (jwtSecret.getBytes(StandardCharsets.UTF_8).length < 32) {
+            throw new IllegalStateException(
+                    "JWT secret must be at least 256 bits (32 bytes). Current length: "
+                    + jwtSecret.getBytes(StandardCharsets.UTF_8).length + " bytes.");
+        }
+    }
 
     /**
      * Creates the HMAC-SHA256 signing key from the configured secret string.

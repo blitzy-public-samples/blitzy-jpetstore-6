@@ -22,11 +22,13 @@ import io.jsonwebtoken.security.Keys;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
+import java.util.Date;
 
 import javax.crypto.SecretKey;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.http.HttpCookie;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.server.reactive.ServerHttpRequest;
@@ -122,25 +124,38 @@ public class AuthenticationFilter implements WebFilter {
     // Configuration (injected via constructor from SecurityConfig)
     // -------------------------------------------------------------------------
 
+    /**
+     * Redis key prefix for per-user password-change timestamps.
+     * Must match the prefix used by Account Service when storing timestamps.
+     */
+    private static final String PWD_CHANGED_KEY_PREFIX = "jwt:pwd_changed:";
+
     /** HMAC-SHA signing key for JWT signature verification. */
     private final SecretKey secretKey;
 
     /** Expected issuer claim in the JWT token. */
     private final String jwtIssuer;
 
+    /** Reactive Redis template for checking per-user token revocation timestamps. */
+    private final ReactiveRedisTemplate<String, String> redisTemplate;
+
     /**
-     * Constructs the AuthenticationFilter with the given JWT configuration.
+     * Constructs the AuthenticationFilter with JWT configuration and Redis access
+     * for token revocation checking.
      *
      * <p>The SecretKey is derived from the raw secret string once at construction
      * time to avoid per-request key construction overhead in a gateway that
      * processes all traffic.</p>
      *
-     * @param jwtSecret raw HMAC-SHA signing key string (from {@code jwt.secret} config)
-     * @param jwtIssuer expected issuer claim (from {@code jwt.issuer} config)
+     * @param jwtSecret     raw HMAC-SHA signing key string (from {@code jwt.secret} config)
+     * @param jwtIssuer     expected issuer claim (from {@code jwt.issuer} config)
+     * @param redisTemplate reactive Redis template for token revocation checks
      */
-    public AuthenticationFilter(String jwtSecret, String jwtIssuer) {
+    public AuthenticationFilter(String jwtSecret, String jwtIssuer,
+                                ReactiveRedisTemplate<String, String> redisTemplate) {
         this.secretKey = Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
         this.jwtIssuer = jwtIssuer;
+        this.redisTemplate = redisTemplate;
         log.info("JWT AuthenticationFilter initialized (WebFilter mode, registered in Security chain)");
     }
 
@@ -201,35 +216,45 @@ public class AuthenticationFilter implements WebFilter {
 
             String username = claims.getSubject();
             String accountId = claims.get("accountId", String.class);
+            Date issuedAt = claims.getIssuedAt();
 
             log.debug("JWT validated successfully for user: {} on path: {}", username, path);
 
-            // Propagate authenticated user claims as headers to downstream services.
-            // This replaces the monolith's session-scoped AccountActionBean state:
-            //   AccountActionBean.getAccount().getUsername() → X-Auth-Username header
-            //   AccountActionBean.getAccount() identity   → X-Auth-AccountId header
-            ServerHttpRequest mutatedRequest = exchange.getRequest().mutate()
-                    .header(AUTH_HEADER_USERNAME, username != null ? username : "")
-                    .header(AUTH_HEADER_ACCOUNT_ID, accountId != null ? accountId : "")
-                    .build();
+            // Check Redis for per-user password-change timestamp to support
+            // JWT revocation after password changes (Issue 11 fix).
+            // If the token was issued before the user's password was changed,
+            // treat the token as revoked — do not populate SecurityContext.
+            return checkTokenRevocation(username, issuedAt)
+                    .flatMap(revoked -> {
+                        if (revoked) {
+                            log.debug("JWT revoked for user {} — token issued before password change", username);
+                            return chain.filter(exchange);
+                        }
 
-            // Populate the ReactiveSecurityContext so that Spring Security's
-            // .authenticated() check on protected paths succeeds. This is the critical
-            // integration point: by writing the Authentication object into the reactive
-            // context, the downstream AuthorizationWebFilter (in the same WebFilter chain)
-            // will find a valid Authentication and permit access.
-            UsernamePasswordAuthenticationToken authentication =
-                    new UsernamePasswordAuthenticationToken(
-                            username,
-                            null,
-                            Collections.emptyList()
-                    );
-            SecurityContextImpl securityContext = new SecurityContextImpl(authentication);
+                        // Token is valid and not revoked — propagate claims downstream.
+                        // This replaces the monolith's session-scoped AccountActionBean state:
+                        //   AccountActionBean.getAccount().getUsername() → X-Auth-Username header
+                        //   AccountActionBean.getAccount() identity   → X-Auth-AccountId header
+                        ServerHttpRequest mutatedRequest = exchange.getRequest().mutate()
+                                .header(AUTH_HEADER_USERNAME, username != null ? username : "")
+                                .header(AUTH_HEADER_ACCOUNT_ID, accountId != null ? accountId : "")
+                                .build();
 
-            return chain.filter(exchange.mutate().request(mutatedRequest).build())
-                    .contextWrite(ReactiveSecurityContextHolder.withSecurityContext(
-                            Mono.just(securityContext)
-                    ));
+                        // Populate the ReactiveSecurityContext so that Spring Security's
+                        // .authenticated() check on protected paths succeeds.
+                        UsernamePasswordAuthenticationToken authentication =
+                                new UsernamePasswordAuthenticationToken(
+                                        username,
+                                        null,
+                                        Collections.emptyList()
+                                );
+                        SecurityContextImpl securityContext = new SecurityContextImpl(authentication);
+
+                        return chain.filter(exchange.mutate().request(mutatedRequest).build())
+                                .contextWrite(ReactiveSecurityContextHolder.withSecurityContext(
+                                        Mono.just(securityContext)
+                                ));
+                    });
 
         } catch (JwtException e) {
             // JWT validation failed — expired, invalid signature, malformed, wrong issuer, etc.
@@ -278,5 +303,56 @@ public class AuthenticationFilter implements WebFilter {
         }
 
         return null;
+    }
+
+    /**
+     * Checks whether a JWT token has been effectively revoked due to a password change.
+     *
+     * <p>When a user changes their password, the Account Service stores the password-change
+     * timestamp in Redis under the key {@code jwt:pwd_changed:{username}}. This method
+     * checks that timestamp against the token's {@code iat} (issued-at) claim. If the
+     * token was issued before the password change, it is considered revoked.</p>
+     *
+     * <p>Graceful degradation: if Redis is unavailable or the lookup fails, the token
+     * is treated as NOT revoked (fail-open). This ensures that a Redis outage does not
+     * prevent all authenticated users from accessing the application.</p>
+     *
+     * @param username the JWT subject (username)
+     * @param issuedAt the JWT's issued-at date
+     * @return {@code Mono<Boolean>} — {@code true} if the token is revoked, {@code false} otherwise
+     */
+    private Mono<Boolean> checkTokenRevocation(String username, Date issuedAt) {
+        // If Redis template is not configured or username/issuedAt is missing,
+        // fail-open: treat the token as not revoked.
+        if (redisTemplate == null || username == null || issuedAt == null) {
+            return Mono.just(Boolean.FALSE);
+        }
+
+        String redisKey = PWD_CHANGED_KEY_PREFIX + username;
+        return redisTemplate.opsForValue().get(redisKey)
+                .map(timestampStr -> {
+                    try {
+                        long pwdChangedMillis = Long.parseLong(timestampStr);
+                        long tokenIssuedMillis = issuedAt.getTime();
+                        // Token is revoked if it was issued before the password change.
+                        // A 1-second buffer accounts for clock skew between services.
+                        boolean revoked = tokenIssuedMillis < (pwdChangedMillis - 1000);
+                        if (revoked) {
+                            log.debug("Token revocation check: user={}, tokenIat={}, pwdChanged={} — REVOKED",
+                                    username, tokenIssuedMillis, pwdChangedMillis);
+                        }
+                        return revoked;
+                    } catch (NumberFormatException e) {
+                        log.warn("Invalid password-change timestamp in Redis for user {}: {}", username, timestampStr);
+                        return Boolean.FALSE;
+                    }
+                })
+                // No entry in Redis means no recent password change — token is valid.
+                .defaultIfEmpty(Boolean.FALSE)
+                // Redis errors should not break authentication — fail-open with a warning log.
+                .onErrorResume(ex -> {
+                    log.warn("Redis error during token revocation check for user {}: {}", username, ex.getMessage());
+                    return Mono.just(Boolean.FALSE);
+                });
     }
 }

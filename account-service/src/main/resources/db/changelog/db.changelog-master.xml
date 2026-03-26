@@ -28,4 +28,13 @@
     <!-- userids referenced in Order Service's orders table exist here.        -->
     <include file="db/changelog/002-seed-data.xml"/>
 
+    <!-- Security hardening: widen signon.password column from varchar(25)    -->
+    <!-- to varchar(72) to accommodate BCrypt password hashes (60 chars).     -->
+    <!-- Must run after seed data so existing rows are preserved.             -->
+    <include file="db/changelog/003-widen-signon-password.xml"/>
+
+    <!-- BCrypt migration: convert existing plaintext seed passwords to       -->
+    <!-- BCrypt hashes. Must run after 003 (column widened to fit hashes).    -->
+    <include file="db/changelog/004-hash-seed-passwords.xml"/>
+
 </databaseChangeLog>

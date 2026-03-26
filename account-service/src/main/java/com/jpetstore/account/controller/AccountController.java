@@ -28,8 +28,12 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 import com.jpetstore.account.dto.AccountDTO;
 import com.jpetstore.account.dto.SignonRequest;
@@ -219,8 +223,25 @@ public class AccountController {
      */
     @PutMapping("/{username}")
     public ResponseEntity<?> updateAccount(@PathVariable String username,
-                                           @Valid @RequestBody AccountDTO accountDTO) {
+                                           @Valid @RequestBody AccountDTO accountDTO,
+                                           @RequestHeader(value = "X-Auth-Username", required = false) String authUsername) {
         log.debug("Update attempt for username: {}", username);
+
+        // Resolve the authenticated username from two possible sources:
+        // 1. SecurityContext principal — set by this service's own JWT filter
+        //    (defense-in-depth: works even when bypassing the API Gateway)
+        // 2. X-Auth-Username header — set by the API Gateway's AuthenticationFilter
+        //    after JWT validation (used when the Gateway proxies the request)
+        String authenticatedUser = resolveAuthenticatedUser(authUsername);
+
+        // Owner-only authorization: the authenticated user must match the path variable.
+        // Prevents IDOR — authenticated user A cannot modify user B's account.
+        if (authenticatedUser == null || !authenticatedUser.equals(username)) {
+            log.warn("Authorization denied: authenticated user '{}' attempted to update account '{}'",
+                    authenticatedUser, username);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body("Access denied: you can only modify your own account");
+        }
 
         // Pre-check existence — mirrors the REST convention of returning 404
         // before attempting the update. This prevents the service layer's
@@ -256,8 +277,22 @@ public class AccountController {
      *         404 Not Found if the account does not exist
      */
     @GetMapping("/{username}")
-    public ResponseEntity<?> getAccount(@PathVariable String username) {
+    public ResponseEntity<?> getAccount(@PathVariable String username,
+                                        @RequestHeader(value = "X-Auth-Username", required = false) String authUsername) {
         log.debug("Account retrieval for username: {}", username);
+
+        // Resolve the authenticated username from SecurityContext (service JWT filter)
+        // or X-Auth-Username header (API Gateway), with SecurityContext taking priority.
+        String authenticatedUser = resolveAuthenticatedUser(authUsername);
+
+        // Owner-only authorization: the authenticated user must match the requested username.
+        // Prevents IDOR — authenticated user A cannot read user B's profile PII.
+        if (authenticatedUser == null || !authenticatedUser.equals(username)) {
+            log.warn("Authorization denied: authenticated user '{}' attempted to read account '{}'",
+                    authenticatedUser, username);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body("Access denied: you can only view your own account");
+        }
 
         Optional<AccountDTO> account = accountService.getAccount(username);
         if (account.isEmpty()) {
@@ -267,5 +302,33 @@ public class AccountController {
         }
 
         return ResponseEntity.ok(account.get());
+    }
+
+    /**
+     * Resolves the authenticated username from two possible sources, providing
+     * defense-in-depth authorization that works both through the API Gateway and
+     * on direct service access.
+     *
+     * <p>Priority order:</p>
+     * <ol>
+     *   <li><strong>SecurityContext principal</strong> — set by this service's own
+     *       JWT filter ({@link SecurityConfig#jwtAuthenticationFilter()}). Available
+     *       when the request carries a valid JWT in the Authorization header, whether
+     *       routed through the Gateway or sent directly to the service.</li>
+     *   <li><strong>X-Auth-Username header</strong> — set by the API Gateway's
+     *       {@code AuthenticationFilter} after JWT validation. Serves as a fallback
+     *       for scenarios where the service's filter is not in the chain.</li>
+     * </ol>
+     *
+     * @param headerUsername the X-Auth-Username header value (may be null)
+     * @return the authenticated username, or null if no authentication source is available
+     */
+    private String resolveAuthenticatedUser(String headerUsername) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth != null && auth.getPrincipal() instanceof String principal
+                && !principal.isBlank()) {
+            return principal;
+        }
+        return headerUsername;
     }
 }

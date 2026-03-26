@@ -16,9 +16,12 @@
 package com.jpetstore.account.service;
 
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -97,10 +100,27 @@ public class AccountService {
     private final ProfileRepository profileRepository;
     private final SignonRepository signonRepository;
     private final BannerDataRepository bannerDataRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final StringRedisTemplate redisTemplate;
 
     /**
-     * Constructs the AccountService with all four repository dependencies.
-     * Spring auto-injects all repositories via constructor injection,
+     * Redis key prefix for storing per-user password-change timestamps.
+     * When a password is changed, the current timestamp is stored under this key.
+     * The API Gateway checks this value to revoke tokens issued before the change.
+     */
+    private static final String PWD_CHANGED_KEY_PREFIX = "jwt:pwd_changed:";
+
+    /**
+     * TTL for password-change invalidation entries in Redis.
+     * Set to 25 hours (slightly more than the max JWT expiration of 24h)
+     * to ensure entries survive until all pre-change tokens have naturally expired.
+     */
+    private static final long PWD_CHANGED_TTL_HOURS = 25;
+
+    /**
+     * Constructs the AccountService with all four repository dependencies,
+     * the BCrypt password encoder, and the Redis template for token revocation.
+     * Spring auto-injects all dependencies via constructor injection,
      * matching the monolith pattern of {@code private final} fields + constructor
      * (source: AccountService.java lines 33-37).
      *
@@ -108,15 +128,21 @@ public class AccountService {
      * @param profileRepository    repository for the profile table
      * @param signonRepository     repository for the signon table
      * @param bannerDataRepository repository for the bannerdata table
+     * @param passwordEncoder      BCrypt password encoder for hashing and verifying passwords
+     * @param redisTemplate        Redis template for storing password-change timestamps
      */
     public AccountService(AccountRepository accountRepository,
                           ProfileRepository profileRepository,
                           SignonRepository signonRepository,
-                          BannerDataRepository bannerDataRepository) {
+                          BannerDataRepository bannerDataRepository,
+                          PasswordEncoder passwordEncoder,
+                          StringRedisTemplate redisTemplate) {
         this.accountRepository = accountRepository;
         this.profileRepository = profileRepository;
         this.signonRepository = signonRepository;
         this.bannerDataRepository = bannerDataRepository;
+        this.passwordEncoder = passwordEncoder;
+        this.redisTemplate = redisTemplate;
     }
 
     /**
@@ -169,8 +195,9 @@ public class AccountService {
     }
 
     /**
-     * Authenticates a user by verifying credentials against the signon table,
-     * then returns the full account data if authentication succeeds.
+     * Authenticates a user by verifying credentials against the signon table
+     * using BCrypt password matching, then returns the full account data if
+     * authentication succeeds.
      *
      * <p>Replaces the monolith's {@code AccountMapper.getAccountByUsernameAndPassword}
      * (AccountMapper.xml lines 52-77) which performed a 4-table JOIN including
@@ -178,32 +205,39 @@ public class AccountService {
      * In the decomposed service, credential check is separated from account data
      * retrieval for cleaner separation of concerns.</p>
      *
-     * <p><strong>Password storage note:</strong> The monolith stores plaintext
-     * passwords in the signon table. This service preserves that behavior per
-     * AAP section 0.8.1 (zero business logic changes). The comparison is delegated
-     * to {@code SignonRepository.findByUsernameAndPassword()}, which performs a
-     * database-level equality check.</p>
+     * <p><strong>Password verification:</strong> Passwords are stored as BCrypt hashes
+     * in the signon table. Authentication loads the signon record by username, then
+     * uses {@link PasswordEncoder#matches(CharSequence, String)} to verify the
+     * supplied plaintext password against the stored BCrypt hash. This prevents
+     * plaintext password storage per AAP security requirements.</p>
      *
-     * <p><strong>Null-return behavior:</strong> Returns {@code null} when credentials
-     * don't match, mirroring the monolith's behavior where SQL returns null on
-     * authentication failure.</p>
+     * <p><strong>Null-return behavior:</strong> Returns {@code Optional.empty()} when
+     * credentials don't match or the user doesn't exist, mirroring the monolith's
+     * behavior where SQL returns null on authentication failure.</p>
      *
      * @param username the username to authenticate
-     * @param password the plaintext password to verify
+     * @param password the plaintext password to verify against the stored BCrypt hash
      * @return an {@link Optional} containing the user's {@link AccountDTO} if credentials
      *         are valid; or {@link Optional#empty()} if authentication fails or the user
      *         does not exist
      */
     @Transactional(readOnly = true)
     public Optional<AccountDTO> getAccountForAuth(String username, String password) {
-        // Step 1: Check credentials via SignonRepository
-        Optional<Signon> signon = signonRepository.findByUsernameAndPassword(username, password);
-        if (signon.isEmpty()) {
-            log.debug("Authentication failed for username: {}", username);
+        // Step 1: Load signon record by username (PK lookup)
+        Optional<Signon> signonOpt = signonRepository.findById(username);
+        if (signonOpt.isEmpty()) {
+            log.debug("Authentication failed — user not found: {}", username);
+            return Optional.empty(); // User does not exist — mirrors monolith: returns null
+        }
+
+        // Step 2: Verify plaintext password against stored BCrypt hash
+        Signon signon = signonOpt.get();
+        if (!passwordEncoder.matches(password, signon.getPassword())) {
+            log.debug("Authentication failed — invalid password for username: {}", username);
             return Optional.empty(); // Invalid credentials — mirrors monolith: returns null on auth failure
         }
 
-        // Step 2: Load full account data (reuse getAccount method — returns Optional)
+        // Step 3: Load full account data (reuse getAccount method — returns Optional)
         return getAccount(username);
     }
 
@@ -221,7 +255,9 @@ public class AccountService {
      * </ol>
      *
      * <p>The insert order (Account → Profile → Signon) exactly matches the monolith's
-     * method call sequence on lines 55-57.</p>
+     * method call sequence on lines 55-57. The password is hashed with BCrypt
+     * before being stored in the signon table, ensuring no plaintext passwords
+     * exist in the database.</p>
      *
      * <p>The {@code @Transactional} annotation ensures atomicity: if any of the
      * three inserts fails, all are rolled back. This preserves the monolith's
@@ -269,9 +305,10 @@ public class AccountService {
         profileRepository.save(profile);
 
         // Step 3: Create and save Signon entity (mirrors monolith: insertSignon, line 57)
+        // Password is hashed with BCrypt before storage — never stored in plaintext
         Signon signon = new Signon();
         signon.setUsername(dto.getUsername());
-        signon.setPassword(dto.getPassword());
+        signon.setPassword(passwordEncoder.encode(dto.getPassword()));
         signonRepository.save(signon);
 
         log.info("Account created successfully for username: {}", dto.getUsername());
@@ -340,15 +377,33 @@ public class AccountService {
         profile.setBanneropt(dto.isBannerOption());
         profileRepository.save(profile);
 
-        // Step 3: Conditional signon update — EXACT mirror of monolith lines 71-72
+        // Step 3: Conditional signon update — mirrors monolith lines 71-72
         // Only update password if non-null and non-empty (length > 0)
+        // Password is hashed with BCrypt before storage — never stored in plaintext
         Optional.ofNullable(dto.getPassword())
                 .filter(password -> password.length() > 0)
                 .ifPresent(password -> {
                     Signon signon = signonRepository.findById(username)
                             .orElseThrow(() -> new RuntimeException("Signon not found: " + username));
-                    signon.setPassword(password);
+                    signon.setPassword(passwordEncoder.encode(password));
                     signonRepository.save(signon);
+
+                    // Store password-change timestamp in Redis for JWT revocation.
+                    // The API Gateway checks this timestamp and rejects tokens
+                    // issued before the password change (Issue 11 fix).
+                    try {
+                        redisTemplate.opsForValue().set(
+                                PWD_CHANGED_KEY_PREFIX + username,
+                                String.valueOf(System.currentTimeMillis()),
+                                PWD_CHANGED_TTL_HOURS, TimeUnit.HOURS);
+                        log.info("Password changed for user {}, JWT revocation timestamp stored in Redis", username);
+                    } catch (Exception e) {
+                        // Redis failure should not roll back the password change.
+                        // Log the error — the old token will remain valid until
+                        // natural expiration (max 1 hour) as a graceful degradation.
+                        log.warn("Failed to store JWT revocation timestamp in Redis for user {}: {}",
+                                username, e.getMessage());
+                    }
                 });
 
         log.info("Account updated successfully for username: {}", username);

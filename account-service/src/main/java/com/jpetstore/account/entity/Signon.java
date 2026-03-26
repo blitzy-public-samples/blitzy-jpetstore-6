@@ -60,9 +60,10 @@ public class Signon implements Serializable {
 
     /**
      * The user's password for authentication.
-     * Stored as a plain string matching the original monolith behavior.
+     * Stored as a BCrypt hash (60 characters). Column length set to 72
+     * to accommodate BCrypt output with margin.
      */
-    @Column(name = "password", length = 25, nullable = false)
+    @Column(name = "password", length = 72, nullable = false)
     private String password;
 
     /**

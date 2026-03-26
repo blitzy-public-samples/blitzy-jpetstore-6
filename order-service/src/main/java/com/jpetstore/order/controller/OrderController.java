@@ -15,7 +15,6 @@
  */
 package com.jpetstore.order.controller;
 
-import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 
@@ -23,18 +22,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jpetstore.order.dto.OrderDTO;
 import com.jpetstore.order.dto.OrderRequest;
 import com.jpetstore.order.exception.ResourceNotFoundException;
@@ -115,25 +112,16 @@ public class OrderController {
     private final OrderService orderService;
 
     /**
-     * Jackson ObjectMapper for JWT payload deserialization. Reused across requests
-     * for efficient JSON parsing when extracting the {@code sub} claim from
-     * JWT tokens during authorization checks.
-     */
-    private final ObjectMapper objectMapper;
-
-    /**
      * Constructs the OrderController with its dependencies.
      *
      * <p>Uses Spring's constructor injection (no {@code @Autowired} needed for
-     * single-constructor classes in Spring Boot). The OrderService bean and
-     * ObjectMapper are automatically resolved from the application context.</p>
+     * single-constructor classes in Spring Boot). The OrderService bean is
+     * automatically resolved from the application context.</p>
      *
      * @param orderService the order business logic service
-     * @param objectMapper Jackson ObjectMapper for JWT payload parsing
      */
-    public OrderController(OrderService orderService, ObjectMapper objectMapper) {
+    public OrderController(OrderService orderService) {
         this.orderService = orderService;
-        this.objectMapper = objectMapper;
     }
 
     // -----------------------------------------------------------------------
@@ -200,15 +188,16 @@ public class OrderController {
      */
     @GetMapping
     public ResponseEntity<List<OrderDTO>> getOrdersByUsername(
-            @RequestParam String username,
-            @RequestHeader(value = "Authorization", required = false) String authorizationHeader) {
+            @RequestParam String username) {
 
         // Authorization check: verify the authenticated user matches the requested username.
         // This prevents Broken Object Level Authorization (BOLA — OWASP API Security #1)
         // where any authenticated user could read another user's order history.
         // The monolith's OrderActionBean.listOrders() inherently prevents this because it
         // uses the session-scoped account bean, not a user-supplied parameter.
-        String authenticatedUser = extractUsernameFromToken(authorizationHeader);
+        // The JWT authentication filter (defense-in-depth) populates the SecurityContext
+        // with the authenticated user from the validated JWT token.
+        String authenticatedUser = getAuthenticatedUsername();
         if (authenticatedUser != null && !authenticatedUser.equals(username)) {
             log.warn("Authorization denied: authenticated user '{}' attempted to access "
                     + "orders for user '{}'", authenticatedUser, username);
@@ -322,56 +311,21 @@ public class OrderController {
     // ───────────────────────────────────────────────────────────────────────────
 
     /**
-     * Extracts the authenticated username from a JWT Bearer token in the
-     * Authorization header.
+     * Extracts the authenticated username from the Spring Security context.
      *
-     * <p>The JWT signature is NOT re-validated here because the API Gateway
-     * has already verified it (per AAP §0.7.6). This method only decodes the
-     * payload (middle segment) using Base64 to read the {@code sub} claim,
-     * which contains the authenticated username.</p>
+     * <p>The {@code JwtAuthenticationFilter} validates the JWT token and populates the
+     * {@link SecurityContextHolder} with the authenticated user's identity. This method
+     * retrieves that identity for authorization checks (e.g., ensuring a user can only
+     * access their own orders).</p>
      *
-     * <p>Returns {@code null} if:</p>
-     * <ul>
-     *   <li>The Authorization header is null or empty</li>
-     *   <li>The header does not start with "Bearer "</li>
-     *   <li>The JWT token is malformed (not 3 dot-separated parts)</li>
-     *   <li>The payload cannot be parsed as JSON</li>
-     *   <li>The {@code sub} claim is missing from the payload</li>
-     * </ul>
-     *
-     * <p>When {@code null} is returned, the caller should allow the request
-     * to proceed (graceful degradation for service-to-service calls or testing
-     * scenarios where no JWT is present).</p>
-     *
-     * @param authorizationHeader the full Authorization header value (e.g., "Bearer eyJ...")
-     * @return the username from the JWT's {@code sub} claim, or {@code null} if extraction fails
+     * @return the authenticated username, or {@code null} if no authentication is present
      */
-    private String extractUsernameFromToken(String authorizationHeader) {
-        if (authorizationHeader == null || !authorizationHeader.startsWith("Bearer ")) {
-            return null;
+    private String getAuthenticatedUsername() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication != null && authentication.isAuthenticated()
+                && authentication.getPrincipal() instanceof String) {
+            return (String) authentication.getPrincipal();
         }
-
-        try {
-            String token = authorizationHeader.substring(7);
-            // JWT structure: header.payload.signature — we only need the payload (index 1)
-            String[] parts = token.split("\\.");
-            if (parts.length < 2) {
-                log.warn("Malformed JWT token: expected at least 2 dot-separated parts");
-                return null;
-            }
-
-            // Decode the payload (Base64URL-encoded JSON)
-            String payload = new String(Base64.getUrlDecoder().decode(parts[1]));
-            JsonNode jsonNode = objectMapper.readTree(payload);
-            JsonNode subNode = jsonNode.get("sub");
-            if (subNode == null || subNode.isNull()) {
-                log.warn("JWT token missing 'sub' claim");
-                return null;
-            }
-            return subNode.asText();
-        } catch (Exception ex) {
-            log.warn("Failed to extract username from JWT token: {}", ex.getMessage());
-            return null;
-        }
+        return null;
     }
 }

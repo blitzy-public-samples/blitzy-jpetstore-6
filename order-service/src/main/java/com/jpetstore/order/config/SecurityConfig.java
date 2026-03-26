@@ -15,13 +15,19 @@
  */
 package com.jpetstore.order.config;
 
+import com.jpetstore.order.security.JwtAuthenticationFilter;
+
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.HttpStatusEntryPoint;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 /**
  * Spring Security configuration for the Order Service.
@@ -61,21 +67,49 @@ import org.springframework.security.web.SecurityFilterChain;
 @EnableWebSecurity
 public class SecurityConfig {
 
+    /** HMAC-SHA secret key for JWT signature verification (shared with Account Service and Gateway). */
+    @Value("${jwt.secret:jpetstore-jwt-secret-key-for-development-only-change-in-production}")
+    private String jwtSecret;
+
+    /** Expected issuer claim for JWT tokens. */
+    @Value("${jwt.issuer:jpetstore}")
+    private String jwtIssuer;
+
+    /**
+     * Creates the JWT authentication filter for defense-in-depth validation.
+     *
+     * <p>This filter validates JWT tokens directly on the Order Service so that
+     * even if the service port (8083) is directly accessible (bypassing the API
+     * Gateway), requests to protected order endpoints are still authenticated.</p>
+     *
+     * @return the configured {@link JwtAuthenticationFilter} instance
+     */
+    @Bean
+    public JwtAuthenticationFilter jwtAuthenticationFilter() {
+        return new JwtAuthenticationFilter(jwtSecret, jwtIssuer);
+    }
+
     /**
      * Configures the HTTP security filter chain for the Order Service.
      *
-     * <p>This configuration mirrors the Catalog Service's security setup,
-     * providing consistent security headers across all microservices while
-     * permitting all HTTP requests (authentication enforcement delegated to
-     * the API Gateway per AAP §0.7.6).</p>
+     * <p>Provides defense-in-depth authentication on order endpoints while keeping
+     * cart endpoints and actuator health checks publicly accessible:</p>
+     * <ul>
+     *   <li><strong>Cart endpoints</strong> ({@code /api/cart/**}): Permit anonymous access.
+     *       Per AAP §0.7.2, unauthenticated users can browse and build a cart.</li>
+     *   <li><strong>Actuator health/info</strong> ({@code /actuator/health}, {@code /actuator/info}):
+     *       Permit all for container orchestration probes.</li>
+     *   <li><strong>Order endpoints</strong> ({@code /api/orders/**}): Require JWT authentication.
+     *       Prevents unauthenticated access even when the service is directly reachable.</li>
+     *   <li><strong>All other endpoints</strong>: Require authentication by default.</li>
+     * </ul>
      *
      * <p>Security headers enabled by {@code Customizer.withDefaults()}:</p>
      * <ul>
-     *   <li>{@code X-Content-Type-Options: nosniff} — prevents MIME-type sniffing</li>
-     *   <li>{@code X-Frame-Options: DENY} — prevents clickjacking</li>
+     *   <li>{@code X-Content-Type-Options: nosniff}</li>
+     *   <li>{@code X-Frame-Options: DENY}</li>
      *   <li>{@code Cache-Control: no-cache, no-store, max-age=0, must-revalidate}</li>
-     *   <li>{@code Pragma: no-cache} — HTTP/1.0 cache prevention</li>
-     *   <li>{@code X-XSS-Protection: 0} — disables browser XSS filter (modern CSP preferred)</li>
+     *   <li>{@code X-XSS-Protection: 0}</li>
      * </ul>
      *
      * @param http the {@link HttpSecurity} builder to configure
@@ -87,11 +121,32 @@ public class SecurityConfig {
         http
                 // Disable CSRF — REST API consumed by programmatic clients, not browsers
                 .csrf(csrf -> csrf.disable())
-                // Permit all requests — authentication enforced at API Gateway layer
-                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
+
+                // Register JWT filter before Spring Security's UsernamePasswordAuthenticationFilter
+                .addFilterBefore(jwtAuthenticationFilter(),
+                        UsernamePasswordAuthenticationFilter.class)
+
+                // Path-based authorization rules for defense-in-depth
+                .authorizeHttpRequests(auth -> auth
+                        // Cart endpoints are public (AAP §0.7.2 — anonymous cart)
+                        .requestMatchers("/api/cart/**").permitAll()
+                        // Actuator health and info for orchestration probes
+                        .requestMatchers("/actuator/health", "/actuator/health/**",
+                                "/actuator/info").permitAll()
+                        // Order endpoints require authentication
+                        .requestMatchers("/api/orders/**").authenticated()
+                        // All other endpoints require authentication by default
+                        .anyRequest().authenticated()
+                )
+
+                // Return 401 instead of redirect to login page for unauthorized requests
+                .exceptionHandling(ex -> ex
+                        .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
+
                 // Stateless session — no server-side session; JWT-based authentication
                 .sessionManagement(session -> session
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+
                 // Enable default security headers for defense-in-depth
                 .headers(Customizer.withDefaults());
 

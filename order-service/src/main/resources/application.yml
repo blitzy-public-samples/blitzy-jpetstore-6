@@ -77,9 +77,9 @@ spring:
   # Service's dedicated PostgreSQL instance.
   # ---------------------------------------------------------------------------
   datasource:
-    url: jdbc:postgresql://postgres-order:5432/jpetstore_order
-    username: jpetstore
-    password: jpetstore
+    url: ${DB_URL:jdbc:postgresql://postgres-order:5432/jpetstore_order}
+    username: ${DB_USERNAME:jpetstore}
+    password: ${DB_PASSWORD:jpetstore}
     driver-class-name: org.postgresql.Driver
     hikari:
       maximum-pool-size: 10
@@ -153,8 +153,8 @@ spring:
   # ---------------------------------------------------------------------------
   data:
     redis:
-      host: redis
-      port: 6379
+      host: ${SPRING_DATA_REDIS_HOST:redis}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
       timeout: 5000ms
       lettuce:
         pool:
@@ -220,12 +220,14 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info
   endpoint:
     health:
       show-details: when-authorized
       probes:
         enabled: true
+    metrics:
+      enabled: false
   health:
     db:
       enabled: true

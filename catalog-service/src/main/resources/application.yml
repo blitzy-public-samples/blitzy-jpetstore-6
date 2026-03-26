@@ -39,9 +39,9 @@ spring:
   # HSQLDB is prohibited in all new services per architectural rules.
   # ---------------------------------------------------------------------------
   datasource:
-    url: jdbc:postgresql://catalog-db:5432/jpetstore_catalog
-    username: catalog_user
-    password: catalog_pass
+    url: ${DB_URL:jdbc:postgresql://catalog-db:5432/jpetstore_catalog}
+    username: ${DB_USERNAME:catalog_user}
+    password: ${DB_PASSWORD:catalog_pass}
     driver-class-name: org.postgresql.Driver
 
     # HikariCP connection pool settings for production readiness
